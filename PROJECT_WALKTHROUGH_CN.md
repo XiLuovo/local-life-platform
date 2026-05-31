@@ -15,7 +15,7 @@
 + 商家后台管理
 ```
 
-它不是单纯的外卖项目，也不是单纯的点评项目，而是把 `sky-take-out` 的外卖和后台管理骨架，与 `hm-dianping` 的 Redis 特色功能合并到一起。
+它不是单纯的外卖项目，也不是单纯的点评项目，而是把苍穹外卖的外卖和后台管理骨架，与黑马点评的 Redis 特色功能合并到一起。
 
 ## 2. 两个顶层文件夹的关系
 
@@ -24,14 +24,14 @@
 ```text
 L:\projects\java-hm-test
 ├── hm-dianping
-└── sky-take-out
+└── local-life-platform
 ```
 
 `hm-dianping` 是黑马点评原项目，重点是 Redis 场景，比如店铺缓存、优惠券秒杀、点赞、关注、签到。
 
-`sky-take-out` 是当前主线项目，原本是苍穹外卖，已有员工后台、菜品、套餐、购物车、订单、报表、WebSocket 催单提醒等能力。现在它吸收了 `hm-dianping` 的本地生活功能，变成了一个更完整的本地生活后端。
+`local-life-platform` 是当前主线项目，原本以苍穹外卖为基础，已有员工后台、菜品、套餐、购物车、订单、报表、WebSocket 催单提醒等能力。现在它吸收了黑马点评的本地生活功能，变成了一个更完整的本地生活后端。
 
-学习和面试时，建议主要围绕 `sky-take-out` 来讲。
+学习和面试时，建议主要围绕 `local-life-platform` 来讲。
 
 ## 3. 常见英文词先解释
 
@@ -83,12 +83,12 @@ L:\projects\java-hm-test
 
 `Mock`：模拟实现，方便本地演示，不依赖真实第三方服务。
 
-## 4. sky-take-out 的三模块结构
+## 4. local-life-platform 的三模块结构
 
-`sky-take-out` 是一个 Maven 多模块项目：
+`local-life-platform` 是一个 Maven 多模块项目：
 
 ```text
-sky-take-out
+local-life-platform
 ├── sky-common
 ├── sky-pojo
 └── sky-server
@@ -990,7 +990,7 @@ MySQL 压力更小
 每日签到 -> Redis BitMap 记录每天是否签到
 ```
 
-这一块主要来自黑马点评项目的思路，合并到了 `sky-take-out` 的用户端接口里。
+这一块主要来自黑马点评项目的思路，合并到了 `local-life-platform` 的用户端接口里。
 
 ### 17.1 社交模块有哪些接口
 
@@ -1431,7 +1431,7 @@ UNIQUE KEY uk_follow_relation (user_id, follow_user_id)
 
 ## 18. 外卖订单模块细拆
 
-外卖订单模块是 `sky-take-out` 原本最核心的业务。
+外卖订单模块是苍穹外卖原本最核心的业务。
 
 前面讲的门店、优惠券、社交偏“本地生活扩展”，这一块偏“真正交易闭环”：
 
@@ -2570,7 +2570,7 @@ tb_voucher_order           优惠券秒杀订单
 
 ### 20.1 先看表的来源
 
-外卖主业务表主要来自 `sky-take-out`：
+外卖主业务表主要来自苍穹外卖：
 
 ```text
 employee
@@ -3238,7 +3238,7 @@ PONG
 进入项目根目录：
 
 ```powershell
-cd L:\projects\java-hm-test\sky-take-out
+cd L:\projects\java-hm-test\local-life-platform
 ```
 
 执行编译：
@@ -3265,7 +3265,7 @@ compile         编译
 进入项目根目录：
 
 ```powershell
-cd L:\projects\java-hm-test\sky-take-out
+cd L:\projects\java-hm-test\local-life-platform
 ```
 
 启动：
@@ -3375,14 +3375,14 @@ Knife4j 页面是否可访问
 第一步，先启动项目：
 
 ```powershell
-cd L:\projects\java-hm-test\sky-take-out
+cd L:\projects\java-hm-test\local-life-platform
 mvn -pl sky-server -am spring-boot:run
 ```
 
 第二步，另开一个 PowerShell 窗口，进入同一目录：
 
 ```powershell
-cd L:\projects\java-hm-test\sky-take-out
+cd L:\projects\java-hm-test\local-life-platform
 ```
 
 第三步，运行脚本：

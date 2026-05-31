@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project is a merged internship-oriented backend built on top of `sky-take-out` and `hm-dianping`.
+This project is an internship-oriented Spring Boot backend for a local life platform.
 
 It now combines:
 
@@ -53,7 +53,7 @@ The goal is to present one coherent "local life platform" instead of two separat
 
 ## New Integration Areas
 
-Compared with the original `sky-take-out`, this merged version adds:
+Compared with a basic take-out system, this version adds:
 
 - store domain: `tb_shop`, `tb_shop_type`
 - marketing domain: `tb_voucher`, `tb_seckill_voucher`, `tb_voucher_order`
@@ -169,8 +169,8 @@ If the current user has no WeChat `openid`, payment falls back to mock pay when:
 
 The seckill order flow is implemented in:
 
-- [VoucherOrderServiceImpl.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
-- [seckill.lua](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/resources/seckill.lua)
+- [VoucherOrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
+- [seckill.lua](sky-server/src/main/resources/seckill.lua)
 
 Flow:
 
@@ -185,14 +185,14 @@ This is one of the best technical highlights to discuss in interviews.
 
 ## Important Entry Files
 
-- app start: [SkyApplication.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/SkyApplication.java)
-- user login: [UserController.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/controller/user/UserController.java)
-- store APIs: [StoreController.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/controller/user/StoreController.java)
-- voucher APIs: [VoucherController.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/controller/user/VoucherController.java)
-- seckill ordering: [VoucherOrderServiceImpl.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
-- social APIs: [BlogController.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/controller/user/BlogController.java)
-- follow APIs: [FollowController.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/controller/user/FollowController.java)
-- order flow: [OrderServiceImpl.java](/L:/projects/java-hm-test/sky-take-out/sky-server/src/main/java/com/sky/service/impl/OrderServiceImpl.java)
+- app start: [SkyApplication.java](sky-server/src/main/java/com/sky/SkyApplication.java)
+- user login: [UserController.java](sky-server/src/main/java/com/sky/controller/user/UserController.java)
+- store APIs: [StoreController.java](sky-server/src/main/java/com/sky/controller/user/StoreController.java)
+- voucher APIs: [VoucherController.java](sky-server/src/main/java/com/sky/controller/user/VoucherController.java)
+- seckill ordering: [VoucherOrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
+- social APIs: [BlogController.java](sky-server/src/main/java/com/sky/controller/user/BlogController.java)
+- follow APIs: [FollowController.java](sky-server/src/main/java/com/sky/controller/user/FollowController.java)
+- order flow: [OrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/OrderServiceImpl.java)
 
 ## Resume-Oriented Summary
 
@@ -202,7 +202,7 @@ You can describe this project like this:
 
 ## Interview Materials
 
-- Chinese resume project description: [RESUME_PROJECT_CN.md](/L:/projects/java-hm-test/sky-take-out/RESUME_PROJECT_CN.md)
-- Chinese interview talk track: [INTERVIEW_TALK_CN.md](/L:/projects/java-hm-test/sky-take-out/INTERVIEW_TALK_CN.md)
-- Chinese self introduction: [SELF_INTRO_CN.md](/L:/projects/java-hm-test/sky-take-out/SELF_INTRO_CN.md)
-- Chinese quick interview Q&A: [INTERVIEW_QA_QUICK_CN.md](/L:/projects/java-hm-test/sky-take-out/INTERVIEW_QA_QUICK_CN.md)
+- Chinese resume project description: [RESUME_PROJECT_CN.md](RESUME_PROJECT_CN.md)
+- Chinese interview talk track: [INTERVIEW_TALK_CN.md](INTERVIEW_TALK_CN.md)
+- Chinese self introduction: [SELF_INTRO_CN.md](SELF_INTRO_CN.md)
+- Chinese quick interview Q&A: [INTERVIEW_QA_QUICK_CN.md](INTERVIEW_QA_QUICK_CN.md)
