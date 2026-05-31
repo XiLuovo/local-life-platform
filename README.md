@@ -183,7 +183,7 @@ Flow:
 5. service creates voucher orders asynchronously
 6. pending-list is retried on failure
 
-This is one of the best technical highlights to discuss in interviews.
+This is one of the best technical highlights in the project.
 
 ## Important Entry Files
 
@@ -196,15 +196,8 @@ This is one of the best technical highlights to discuss in interviews.
 - follow APIs: [FollowController.java](sky-server/src/main/java/com/sky/controller/user/FollowController.java)
 - order flow: [OrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/OrderServiceImpl.java)
 
-## Resume-Oriented Summary
+## Project Summary
 
 You can describe this project like this:
 
 > Built a Spring Boot local life platform by integrating take-out ordering, store discovery, voucher marketing, social blog interaction, and high-concurrency seckill ordering. Implemented JWT login, Redis caching, BitMap sign-in, ZSet-based feed/likes, and Lua + Redis Stream asynchronous order processing.
-
-## Interview Materials
-
-- Chinese resume project description: [RESUME_PROJECT_CN.md](RESUME_PROJECT_CN.md)
-- Chinese interview talk track: [INTERVIEW_TALK_CN.md](INTERVIEW_TALK_CN.md)
-- Chinese self introduction: [SELF_INTRO_CN.md](SELF_INTRO_CN.md)
-- Chinese quick interview Q&A: [INTERVIEW_QA_QUICK_CN.md](INTERVIEW_QA_QUICK_CN.md)

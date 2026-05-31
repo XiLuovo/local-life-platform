@@ -16,6 +16,10 @@ sky-server/src/main/resources/application-local.yml
 *.key
 *.p12
 *.jks
+INTERVIEW_*.md
+PROJECT_WALKTHROUGH_CN.md
+RESUME_PROJECT_CN.md
+SELF_INTRO_CN.md
 
 # Logs
 logs/
