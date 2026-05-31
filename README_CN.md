@@ -103,10 +103,6 @@ powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
 
 - Knife4j：`http://localhost:8080/doc.html`
 
-## 项目一句话
-
-> 这是一个把苍穹外卖和黑马点评整合起来的本地生活平台后端，重点做了 JWT 登录、Redis 缓存、签到、点赞关注、动态流和 Lua + Stream 秒杀异步下单。
-
 ## 相关资料
 
 - [接口总览](API_OVERVIEW.md)
