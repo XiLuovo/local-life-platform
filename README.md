@@ -1,5 +1,7 @@
 # Local Life Platform
 
+[中文 README](README_CN.md)
+
 ## Project Overview
 
 This project is an internship-oriented Spring Boot backend for a local life platform.
