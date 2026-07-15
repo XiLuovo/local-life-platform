@@ -30,7 +30,7 @@ public interface OrderMapper {
      * @return order entity
      */
     @Select("select * from orders where number = #{orderNumber} and user_id= #{userId}")
-    Orders getByNumberAndUserId(String orderNumber, Long userId);
+    Orders getByNumberAndUserId(@Param("orderNumber") String orderNumber, @Param("userId") Long userId);
 
     /**
      * Query order by order number.
@@ -73,6 +73,13 @@ public interface OrderMapper {
      */
     @Select("select * from orders where id=#{id}")
     Orders getById(Long id);
+
+    /**
+     * Query a user order by id. User-facing operations must use this method
+     * instead of trusting an order id supplied by the client.
+     */
+    @Select("select * from orders where id = #{id} and user_id = #{userId}")
+    Orders getByIdAndUserId(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
      * Count orders by status.

@@ -24,8 +24,8 @@ public class OrdersSubmitDTO implements Serializable {
     private Integer tablewareNumber;
     //餐具数量状态  1按餐量提供  0选择具体数量
     private Integer tablewareStatus;
-    //打包费
+    //兼容旧客户端保留，服务端会重新计算，不信任该值
     private Integer packAmount;
-    //总金额
+    //兼容旧客户端保留，服务端会根据购物车重新计算，不信任该值
     private BigDecimal amount;
 }

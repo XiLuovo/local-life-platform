@@ -56,8 +56,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class OrderServiceImpl implements OrderService {
 
-    private static final BigDecimal TEST_PAYMENT_AMOUNT = new BigDecimal("0.01");
-
     @Autowired
     private OrderMapper orderMapper;
     @Autowired
@@ -79,18 +77,26 @@ public class OrderServiceImpl implements OrderService {
     @Value("${sky.baidu.ak}")
     private String ak;
 
-    @Value("${sky.pay.mock-enabled:true}")
+    @Value("${sky.pay.mock-enabled:false}")
     private boolean mockPayEnabled;
+
+    @Value("${sky.order.pack-fee-per-item:0}")
+    private int packFeePerItem;
 
     @Override
     @Transactional
     public OrderSubmitVO submitOrder(OrdersSubmitDTO ordersSubmitDTO) {
-        AddressBook addressBook = addressBookMapper.getById(ordersSubmitDTO.getAddressBookId());
-        if (addressBook == null) {
+        if (ordersSubmitDTO == null || ordersSubmitDTO.getAddressBookId() == null) {
             throw new AddressBookBusinessException(MessageConstant.ADDRESS_BOOK_IS_NULL);
         }
 
         Long userId = BaseContext.getCurrentId();
+        AddressBook addressBook = addressBookMapper.getByIdAndUserId(
+                ordersSubmitDTO.getAddressBookId(), userId);
+        if (addressBook == null) {
+            throw new AddressBookBusinessException(MessageConstant.ADDRESS_BOOK_IS_NULL);
+        }
+
         ShoppingCart shoppingCart = new ShoppingCart();
         shoppingCart.setUserId(userId);
         List<ShoppingCart> shoppingCartList = shoppingCartMapper.list(shoppingCart);
@@ -98,8 +104,11 @@ public class OrderServiceImpl implements OrderService {
             throw new ShoppingCartBusinessException(MessageConstant.SHOPPING_CART_IS_NULL);
         }
 
+        int calculatedPackAmount = calculatePackAmount(shoppingCartList);
+        BigDecimal calculatedAmount = calculateOrderAmount(shoppingCartList, calculatedPackAmount);
+
         Orders orders = new Orders();
-        BeanUtils.copyProperties(ordersSubmitDTO, orders);
+        BeanUtils.copyProperties(ordersSubmitDTO, orders, "amount", "packAmount", "tablewareNumber");
         orders.setOrderTime(LocalDateTime.now());
         orders.setPayStatus(Orders.UN_PAID);
         orders.setStatus(Orders.PENDING_PAYMENT);
@@ -108,6 +117,9 @@ public class OrderServiceImpl implements OrderService {
         orders.setPhone(addressBook.getPhone());
         orders.setConsignee(addressBook.getConsignee());
         orders.setUserId(userId);
+        orders.setPackAmount(calculatedPackAmount);
+        orders.setAmount(calculatedAmount);
+        orders.setTablewareNumber(normalizeTablewareNumber(ordersSubmitDTO.getTablewareNumber()));
 
         orderMapper.insert(orders);
 
@@ -180,6 +192,25 @@ public class OrderServiceImpl implements OrderService {
             throw new OrderBusinessException(MessageConstant.USER_NOT_LOGIN);
         }
 
+        if (ordersPaymentDTO == null || !StringUtils.hasText(ordersPaymentDTO.getOrderNumber())) {
+            throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+        }
+
+        Orders order = orderMapper.getByNumberAndUserId(ordersPaymentDTO.getOrderNumber(), userId);
+        if (order == null) {
+            throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+        }
+        if (!Orders.PENDING_PAYMENT.equals(order.getStatus()) || !Orders.UN_PAID.equals(order.getPayStatus())) {
+            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+        }
+        if (order.getAmount() == null || order.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new OrderBusinessException("订单金额异常");
+        }
+        if (ordersPaymentDTO.getPayMethod() != null
+                && !ordersPaymentDTO.getPayMethod().equals(order.getPayMethod())) {
+            throw new OrderBusinessException("支付方式与订单不一致");
+        }
+
         if (!StringUtils.hasText(user.getOpenid())) {
             if (!mockPayEnabled) {
                 throw new OrderBusinessException("Current account is not linked to WeChat pay");
@@ -197,7 +228,7 @@ public class OrderServiceImpl implements OrderService {
 
         JSONObject jsonObject = weChatPayUtil.pay(
                 ordersPaymentDTO.getOrderNumber(),
-                TEST_PAYMENT_AMOUNT,
+                order.getAmount(),
                 "Order payment",
                 user.getOpenid()
         );
@@ -272,7 +303,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public OrderVO details(Long id) {
-        Orders orders = orderMapper.getById(id);
+        Orders orders = getRequiredUserOrder(id);
         List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(orders.getId());
 
         OrderVO orderVO = new OrderVO();
@@ -283,10 +314,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public void userCancelById(Long id) throws Exception {
-        Orders ordersDB = orderMapper.getById(id);
-        if (ordersDB == null) {
-            throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
-        }
+        Orders ordersDB = getRequiredUserOrder(id);
         if (ordersDB.getStatus() > 2) {
             throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
         }
@@ -307,6 +335,7 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public void repetition(Long id) {
         Long userId = BaseContext.getCurrentId();
+        getRequiredUserOrder(id);
         List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
 
         List<ShoppingCart> shoppingCartList = orderDetailList.stream().map(item -> {
@@ -457,6 +486,10 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private void refundIfNeeded(Orders orders) throws Exception {
+        if (orders.getAmount() == null || orders.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new OrderBusinessException("订单金额异常");
+        }
+
         User user = userMapper.getById(orders.getUserId());
         if (user == null || !StringUtils.hasText(user.getOpenid())) {
             log.info("Skip WeChat refund for mock-paid order, orderNumber={}", orders.getNumber());
@@ -466,22 +499,64 @@ public class OrderServiceImpl implements OrderService {
         String refund = weChatPayUtil.refund(
                 orders.getNumber(),
                 orders.getNumber(),
-                TEST_PAYMENT_AMOUNT,
-                TEST_PAYMENT_AMOUNT);
+                orders.getAmount(),
+                orders.getAmount());
         log.info("Refund requested: {}", refund);
     }
 
     @Override
     public void reminder(Long id) {
-        Orders ordersDB = orderMapper.getById(id);
-        if (ordersDB == null) {
-            throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
-        }
+        Orders ordersDB = getRequiredUserOrder(id);
 
         Map<String, Object> map = new HashMap<>();
         map.put("type", 2);
         map.put("orderId", id);
         map.put("content", "Order No: " + ordersDB.getNumber());
         webSocketServer.sendToAllClient(JSON.toJSONString(map));
+    }
+
+    private Orders getRequiredUserOrder(Long orderId) {
+        Long userId = BaseContext.getCurrentId();
+        Orders orders = orderMapper.getByIdAndUserId(orderId, userId);
+        if (orders == null) {
+            throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+        }
+        return orders;
+    }
+
+    private int calculatePackAmount(List<ShoppingCart> shoppingCartList) {
+        if (packFeePerItem < 0) {
+            throw new OrderBusinessException("打包费配置错误");
+        }
+
+        int itemCount = 0;
+        for (ShoppingCart cart : shoppingCartList) {
+            if (cart.getNumber() == null || cart.getNumber() <= 0) {
+                throw new OrderBusinessException("购物车商品数量异常");
+            }
+            itemCount = Math.addExact(itemCount, cart.getNumber());
+        }
+        return Math.multiplyExact(itemCount, packFeePerItem);
+    }
+
+    private BigDecimal calculateOrderAmount(List<ShoppingCart> shoppingCartList, int calculatedPackAmount) {
+        BigDecimal amount = BigDecimal.ZERO;
+        for (ShoppingCart cart : shoppingCartList) {
+            if (cart.getAmount() == null) {
+                throw new OrderBusinessException("购物车商品价格异常");
+            }
+            amount = amount.add(cart.getAmount().multiply(BigDecimal.valueOf(cart.getNumber())));
+        }
+        return amount.add(BigDecimal.valueOf(calculatedPackAmount));
+    }
+
+    private int normalizeTablewareNumber(Integer tablewareNumber) {
+        if (tablewareNumber == null) {
+            return 0;
+        }
+        if (tablewareNumber < 0) {
+            throw new OrderBusinessException("餐具数量不能为负数");
+        }
+        return tablewareNumber;
     }
 }

@@ -63,6 +63,9 @@ sky:
   shop:
     address: 北京市海淀区上地十街10号
   pay:
-    mock-enabled: true
+    mock-enabled: ${SKY_PAY_MOCK_ENABLED:false}
+  order:
+    # 服务端按商品数量计算打包费，客户端提交的金额与打包费不会被信任
+    pack-fee-per-item: 0
   baidu:
     ak: your-ak
