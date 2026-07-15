@@ -1,0 +1,37 @@
+sky:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    host: mysql
+    port: 3306
+    database: ${MYSQL_DATABASE:sky_take_out}
+    username: ${MYSQL_USER:sky}
+    password: ${MYSQL_PASSWORD:local_app_password}
+  redis:
+    host: redis
+    port: 6379
+    password: ${REDIS_PASSWORD:local_redis_password}
+    database: 10
+  alioss:
+    endpoint: oss-cn-beijing.aliyuncs.com
+    access-key-id: local-placeholder
+    access-key-secret: local-placeholder
+    bucket-name: local-placeholder
+  wechat:
+    appid: local-placeholder
+    secret: local-placeholder
+    mchid: local-placeholder
+    mchSerialNo: local-placeholder
+    privateKeyFilePath: /tmp/local-placeholder.pem
+    apiV3Key: local-placeholder-api-v3-key
+    weChatPayCertFilePath: /tmp/local-placeholder-cert.pem
+    notifyUrl: http://localhost:8080/notify/paySuccess
+    refundNotifyUrl: http://localhost:8080/notify/refundSuccess
+  jwt:
+    admin-secret-key: ${SKY_JWT_ADMIN_SECRET}
+    user-secret-key: ${SKY_JWT_USER_SECRET}
+  pay:
+    mock-enabled: ${SKY_PAY_MOCK_ENABLED:false}
+  auth:
+    fixed-login-code: ${SKY_AUTH_FIXED_LOGIN_CODE:}
+  baidu:
+    ak: local-placeholder

@@ -74,16 +74,27 @@ For GitHub, the real `application-dev.yml` is ignored because it may contain loc
 
 ## Database Preparation
 
-This repository includes incremental SQL for the merged features:
+The repository includes the complete base, marketing, and social schema. Import them in this order:
 
-- [sky_take_out_local_life.sql](sky-server/src/main/resources/db/sky_take_out_local_life.sql)
-- [sky_take_out_social.sql](sky-server/src/main/resources/db/sky_take_out_social.sql)
+1. [00-sky_take_out_base.sql](sky-server/src/main/resources/db/00-sky_take_out_base.sql)
+2. [sky_take_out_local_life.sql](sky-server/src/main/resources/db/sky_take_out_local_life.sql)
+3. [sky_take_out_social.sql](sky-server/src/main/resources/db/sky_take_out_social.sql)
 
-Recommended order:
+## One-command Docker Startup
 
-1. Prepare the original `sky_take_out` base tables used by the take-out system.
-2. Execute [sky_take_out_local_life.sql](sky-server/src/main/resources/db/sky_take_out_local_life.sql).
-3. Execute [sky_take_out_social.sql](sky-server/src/main/resources/db/sky_take_out_social.sql).
+```powershell
+Copy-Item .env.example .env
+docker compose up --build -d
+```
+
+The application is available at `http://localhost:8080`, with Knife4j at `http://localhost:8080/doc.html`.
+
+To reset the database and rerun all initialization scripts:
+
+```powershell
+docker compose down -v
+docker compose up --build -d
+```
 
 ## Run
 

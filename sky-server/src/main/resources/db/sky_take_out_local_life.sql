@@ -83,4 +83,4 @@ INSERT IGNORE INTO `tb_voucher` (`id`, `shop_id`, `title`, `sub_title`, `rules`,
   (2, 2, 'Flash Coffee Coupon', 'Limited seckill offer', 'One per user', 3000, 990, 1, 1);
 
 INSERT IGNORE INTO `tb_seckill_voucher` (`voucher_id`, `stock`, `begin_time`, `end_time`) VALUES
-  (2, 50, '2026-01-01 00:00:00', '2026-12-31 23:59:59');
+  (2, 50, DATE_SUB(NOW(), INTERVAL 1 DAY), DATE_ADD(NOW(), INTERVAL 365 DAY));

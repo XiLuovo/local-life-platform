@@ -80,16 +80,45 @@ $env:SKY_AUTH_FIXED_LOGIN_CODE="123456"
 
 ## 数据库初始化
 
-建议顺序：
+仓库已经包含完整的基础表、营销表和社交表脚本，建议顺序：
 
-1. 准备外卖基础表
+1. 导入 `00-sky_take_out_base.sql`
 2. 导入 `sky_take_out_local_life.sql`
 3. 导入 `sky_take_out_social.sql`
 
 对应文件：
 
+- [00-sky_take_out_base.sql](sky-server/src/main/resources/db/00-sky_take_out_base.sql)
 - [sky_take_out_local_life.sql](sky-server/src/main/resources/db/sky_take_out_local_life.sql)
 - [sky_take_out_social.sql](sky-server/src/main/resources/db/sky_take_out_social.sql)
+
+## Docker 一键启动
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build -d
+```
+
+启动后：
+
+- 服务：`http://localhost:8080`
+- Knife4j：`http://localhost:8080/doc.html`
+- MySQL：`localhost:13306/sky_take_out`
+- Redis：`localhost:16379`
+
+查看状态和日志：
+
+```powershell
+docker compose ps
+docker compose logs -f app
+```
+
+如需重新执行初始化 SQL：
+
+```powershell
+docker compose down -v
+docker compose up --build -d
+```
 
 ## 启动方式
 
