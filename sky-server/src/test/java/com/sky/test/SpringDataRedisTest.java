@@ -1,6 +1,7 @@
 package com.sky.test;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Disabled;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.DataType;
@@ -11,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 //@SpringBootTest
+@Disabled("手工 Redis 操作示例，需要本机 Redis 环境")
 public class SpringDataRedisTest {
 
     @Autowired
