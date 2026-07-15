@@ -10,9 +10,11 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Disabled;
 import org.springframework.boot.test.context.SpringBootTest;
 
 //@SpringBootTest
+@Disabled("手工 HTTP 客户端示例，需要本机先启动 8080 服务")
 public class HttpClientTest {
 
     /**
