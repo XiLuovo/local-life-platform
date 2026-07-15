@@ -115,11 +115,7 @@ $sendCodeResponse = Invoke-AppApi -Method POST -Path "/user/user/code?phone=$Pho
 [void](Assert-Success -Response $sendCodeResponse -Name "Send login code")
 
 if (-not $Code) {
-    Write-Host "Read the 6-digit verification code from the application logs." -ForegroundColor Yellow
-    $Code = Read-Host "Enter verification code"
-}
-if (-not $Code) {
-    throw "Verification code is required"
+    throw "Pass -Code with the same value as SKY_AUTH_FIXED_LOGIN_CODE. Verification codes are not printed to logs."
 }
 
 Write-Step "Logging in"

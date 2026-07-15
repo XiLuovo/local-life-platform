@@ -39,17 +39,11 @@ public class PayNotifyController {
     @RequestMapping("/paySuccess")
     public void paySuccessNotify(HttpServletRequest request, HttpServletResponse response) throws Exception {
         String body = readData(request);
-        log.info("支付成功回调：{}", body);
-
         String plainText = decryptData(body);
-        log.info("解密后的文本：{}", plainText);
 
         JSONObject jsonObject = JSON.parseObject(plainText);
         String outTradeNo = jsonObject.getString("out_trade_no");
-        String transactionId = jsonObject.getString("transaction_id");
-
-        log.info("商户平台订单号：{}", outTradeNo);
-        log.info("微信支付交易号：{}", transactionId);
+        log.info("收到支付成功回调，orderNumber={}", outTradeNo);
 
         try {
             orderService.paySuccess(outTradeNo);

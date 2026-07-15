@@ -9,6 +9,7 @@ import com.sky.service.UserService;
 import com.sky.utils.RegexUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -33,20 +34,28 @@ public class UserServiceImpl implements UserService {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Value("${sky.auth.fixed-login-code:}")
+    private String fixedLoginCode;
+
     @Override
     public void sendLoginCode(String phone) {
         if (RegexUtils.isPhoneInvalid(phone)) {
             throw new BaseException("Invalid phone number");
         }
 
-        String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1_000_000));
+        if (StringUtils.hasText(fixedLoginCode) && RegexUtils.isCodeInvalid(fixedLoginCode)) {
+            throw new BaseException("Fixed login code must be exactly 6 digits");
+        }
+        String code = StringUtils.hasText(fixedLoginCode)
+                ? fixedLoginCode
+                : String.format("%06d", ThreadLocalRandom.current().nextInt(1_000_000));
         stringRedisTemplate.opsForValue().set(
                 RedisConstants.LOGIN_CODE_KEY + phone,
                 code,
                 RedisConstants.LOGIN_CODE_TTL,
                 TimeUnit.MINUTES
         );
-        log.info("Generated login code for {}: {}", phone, code);
+        log.info("Login verification code generated");
     }
 
     @Override

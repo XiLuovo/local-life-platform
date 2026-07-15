@@ -39,7 +39,7 @@
                 is_default = #{isDefault},
             </if>
         </set>
-        where id = #{id}
+        where id = #{id} and user_id = #{userId}
     </update>
 
 </mapper>
