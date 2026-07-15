@@ -168,7 +168,6 @@ public class WeChatPayUtil {
         String bodyAsString = jsapi(orderNum, total, description, openid);
         //解析返回结果
         JSONObject jsonObject = JSON.parseObject(bodyAsString);
-        System.out.println(jsonObject);
 
         String prepayId = jsonObject.getString("prepay_id");
         if (prepayId != null) {

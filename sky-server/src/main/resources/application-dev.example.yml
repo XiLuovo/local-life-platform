@@ -27,5 +27,5 @@ sky:
     notifyUrl: https://example.com/notify/paySuccess
     refundNotifyUrl: https://example.com/notify/refundSuccess
   jwt:
-    admin-secret-key: change-me-admin-secret
-    user-secret-key: change-me-user-secret
+    admin-secret-key: replace-with-at-least-32-random-characters
+    user-secret-key: replace-with-another-32-random-characters

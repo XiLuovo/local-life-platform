@@ -496,12 +496,12 @@ public class OrderServiceImpl implements OrderService {
             return;
         }
 
-        String refund = weChatPayUtil.refund(
+        weChatPayUtil.refund(
                 orders.getNumber(),
                 orders.getNumber(),
                 orders.getAmount(),
                 orders.getAmount());
-        log.info("Refund requested: {}", refund);
+        log.info("Refund requested, orderNumber={}", orders.getNumber());
     }
 
     @Override

@@ -37,12 +37,12 @@ logging:
 sky:
   jwt:
     # 设置jwt签名加密时使用的秘钥
-    admin-secret-key: ${SKY_JWT_ADMIN_SECRET:change-me-admin-secret}
+    admin-secret-key: ${SKY_JWT_ADMIN_SECRET}
     # 设置jwt过期时间
     admin-ttl: 7200000
     # 设置前端传递过来的令牌名称
     admin-token-name: token
-    user-secret-key: ${SKY_JWT_USER_SECRET:change-me-user-secret}
+    user-secret-key: ${SKY_JWT_USER_SECRET}
     user-ttl: 7200000
     user-token-name: authentication
   alioss:
@@ -64,6 +64,9 @@ sky:
     address: 北京市海淀区上地十街10号
   pay:
     mock-enabled: ${SKY_PAY_MOCK_ENABLED:false}
+  auth:
+    # 仅用于本地联调；生产环境保持为空并接入真实短信服务
+    fixed-login-code: ${SKY_AUTH_FIXED_LOGIN_CODE:}
   order:
     # 服务端按商品数量计算打包费，客户端提交的金额与打包费不会被信任
     pack-fee-per-item: 0

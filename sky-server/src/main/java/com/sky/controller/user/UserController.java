@@ -38,7 +38,7 @@ public class UserController {
     @PostMapping("/code")
     @ApiOperation("Send login code")
     public Result<Void> sendCode(@RequestParam String phone) {
-        log.info("Send login code for phone: {}", phone);
+        log.info("Login code requested");
         userService.sendLoginCode(phone);
         return Result.success();
     }
@@ -46,7 +46,7 @@ public class UserController {
     @PostMapping("/login")
     @ApiOperation("Login with phone verification code")
     public Result<UserLoginVO> login(@RequestBody UserLoginDTO userLoginDTO) {
-        log.info("Phone login attempt for: {}", userLoginDTO.getPhone());
+        log.info("Phone login attempt");
 
         User user = userService.login(userLoginDTO);
 

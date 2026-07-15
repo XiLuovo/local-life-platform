@@ -102,13 +102,14 @@ mvn -q -pl sky-server -am -DskipTests compile
 Quick smoke test:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
+$env:SKY_AUTH_FIXED_LOGIN_CODE="123456" # set this before starting the server
+powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1 -Code 123456
 ```
 
 The script will:
 
 - send a login code
-- prompt for the 6-digit code from app logs
+- use the explicitly configured local development code
 - test public store, voucher, and blog APIs
 - test authenticated user, social, sign-in, and seckill APIs
 
@@ -121,7 +122,7 @@ After startup:
 ### 1. Login
 
 1. `POST /user/user/code?phone=13800138000`
-2. Read the verification code from application logs
+2. For local development only, set `SKY_AUTH_FIXED_LOGIN_CODE` before starting the server
 3. `POST /user/user/login`
 
 Example body:
@@ -163,9 +164,9 @@ authentication: <token>
 3. submit order: `POST /user/order/submit`
 4. pay order: `PUT /user/order/payment`
 
-If the current user has no WeChat `openid`, payment falls back to mock pay when:
+If the current user has no WeChat `openid`, mock payment is disabled by default. Enable it only for local development with:
 
-- `sky.pay.mock-enabled=true`
+- `SKY_PAY_MOCK_ENABLED=true`
 
 ## High-Concurrency Seckill Design
 

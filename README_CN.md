@@ -68,6 +68,16 @@ sky-server/src/main/resources/application-dev.example.yml
 -> sky-server/src/main/resources/application-dev.yml
 ```
 
+JWT 密钥不再提供不安全的默认值，请在本地配置文件或环境变量中显式设置。仅本地联调时，可设置固定验证码：
+
+```powershell
+$env:SKY_JWT_ADMIN_SECRET="至少32位随机字符串"
+$env:SKY_JWT_USER_SECRET="另一段至少32位随机字符串"
+$env:SKY_AUTH_FIXED_LOGIN_CODE="123456"
+```
+
+验证码和 JWT 不会写入应用日志。
+
 ## 数据库初始化
 
 建议顺序：
@@ -96,7 +106,7 @@ mvn -q -pl sky-server -am -DskipTests compile
 冒烟测试：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
+powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1 -Code 123456
 ```
 
 ## 接口文档
