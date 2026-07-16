@@ -49,7 +49,8 @@ The goal is to present one coherent "local life platform" instead of two separat
 - Redis ZSet for blog likes and feed push
 - Redis ID worker for distributed-style order ids
 - Redis Lua for atomic seckill qualification
-- Redis Stream for asynchronous voucher order creation
+- Redis Stream for asynchronous voucher order creation with bounded retries, `XCLAIM` recovery, and DLQ handling
+- Lua scripts for atomic order status transitions, acknowledgements, and idempotent compensation
 - WebSocket-based order reminder notifications
 - mock payment fallback for phone-login users without WeChat `openid`
 
@@ -157,6 +158,7 @@ authentication: <token>
 2. query stores by type: `GET /user/store/of/type?typeId=1&current=1`
 3. query vouchers of a store: `GET /user/voucher/list/1`
 4. create a seckill order: `POST /user/voucher-order/seckill/2`
+5. query the asynchronous result: `GET /user/voucher-order/{orderId}/status`
 
 ### 3. Social Flow
 
@@ -185,15 +187,38 @@ The seckill order flow is implemented in:
 
 - [VoucherOrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
 - [seckill.lua](sky-server/src/main/resources/seckill.lua)
+- [seckill_complete.lua](sky-server/src/main/resources/seckill_complete.lua)
+- [seckill_fail.lua](sky-server/src/main/resources/seckill_fail.lua)
 
 Flow:
 
 1. request reaches `/user/voucher-order/seckill/{id}`
-2. Lua script checks stock and duplicate order atomically
-3. Redis decrements stock and writes order message into `stream.orders`
-4. background consumer reads stream messages
-5. service creates voucher orders asynchronously
-6. pending-list is retried on failure
+2. Lua checks stock and duplicate purchase, decrements stock, writes the Stream message, and records `PENDING` atomically
+3. the background consumer creates the database order asynchronously
+4. successful processing atomically records `SUCCESS`, acknowledges the Stream message, and clears retry state
+5. failed processing uses bounded delayed retries instead of a hot pending-list loop
+6. another instance can recover stale messages from crashed consumers through `XPENDING + XCLAIM`
+7. after retries are exhausted, the service checks the final database state before applying any compensation
+8. only deterministic conflicts are compensated automatically; uncertain outcomes keep their reservation and are sent to the DLQ for review
+9. failed or review-required messages are marked `FAILED` and acknowledged atomically, while a late confirmed database commit can still correct an uncompensated status to `SUCCESS`
+
+The client can poll `GET /user/voucher-order/{orderId}/status`. The endpoint only exposes the current user's order and falls back to the database when Redis status data is unavailable.
+
+Available states:
+
+- `PENDING`: qualification passed and the database order is being created
+- `SUCCESS`: the database order exists
+- `FAILED`: processing was terminated; the response may include a failure reason
+
+Reliability settings:
+
+| Environment variable | Default | Purpose |
+| --- | ---: | --- |
+| `SKY_SECKILL_CONSUMER_NAME` | host name | consumer name prefix; each JVM appends a UUID |
+| `SKY_SECKILL_MAX_RETRIES` | `3` | maximum processing attempts |
+| `SKY_SECKILL_RETRY_DELAY_MS` | `2000` | delay before retrying current-consumer pending messages |
+| `SKY_SECKILL_CLAIM_IDLE_MS` | `30000` | idle time before another consumer may claim a message |
+| `SKY_SECKILL_BLOCK_TIMEOUT_MS` | `2000` | blocking Stream read timeout |
 
 This is one of the best technical highlights in the project.
 

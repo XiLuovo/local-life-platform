@@ -6,6 +6,7 @@ import com.sky.exception.BaseException;
 import com.sky.mapper.SeckillVoucherMapper;
 import com.sky.mapper.VoucherOrderMapper;
 import com.sky.utils.RedisIdWorker;
+import com.sky.vo.VoucherOrderStatusVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,13 +15,23 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -47,6 +58,8 @@ class VoucherOrderServiceImplTest {
     private StringRedisTemplate stringRedisTemplate;
     @Mock
     private ValueOperations<String, String> valueOperations;
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
     @Mock
     private TransactionTemplate transactionTemplate;
 
@@ -144,9 +157,235 @@ class VoucherOrderServiceImplTest {
                 anyList(),
                 eq(VOUCHER_ID.toString()),
                 eq(USER_ID.toString()),
-                eq(ORDER_ID.toString())
+                eq(ORDER_ID.toString()),
+                eq("86400")
         );
         verify(voucherOrderMapper, never()).insert(any());
+    }
+
+    @Test
+    void shouldRejectStatusQueryWhenUserIsNotLoggedIn() {
+        BaseException exception = assertThrows(
+                BaseException.class,
+                () -> voucherOrderService.getOrderStatus(ORDER_ID)
+        );
+
+        assertEquals("用户未登录", exception.getMessage());
+        verifyNoInteractions(hashOperations, voucherOrderMapper);
+    }
+
+    @Test
+    void shouldReturnPendingStatusForOwnedOrder() {
+        BaseContext.setCurrentId(USER_ID);
+        arrangeCachedStatus(USER_ID, "PENDING", "");
+
+        VoucherOrderStatusVO result = voucherOrderService.getOrderStatus(ORDER_ID);
+
+        assertEquals(ORDER_ID, result.getOrderId());
+        assertEquals("PENDING", result.getStatus());
+        assertNull(result.getMessage());
+        verify(voucherOrderMapper, never()).getByIdAndUserId(any(), any());
+    }
+
+    @Test
+    void shouldReturnFailedStatusAndReasonForOwnedOrder() {
+        BaseContext.setCurrentId(USER_ID);
+        arrangeCachedStatus(USER_ID, "FAILED", "Order processing failed after retries");
+
+        VoucherOrderStatusVO result = voucherOrderService.getOrderStatus(ORDER_ID);
+
+        assertEquals("FAILED", result.getStatus());
+        assertEquals("Order processing failed after retries", result.getMessage());
+    }
+
+    @Test
+    void shouldHideStatusOwnedByAnotherUser() {
+        BaseContext.setCurrentId(USER_ID);
+        arrangeCachedStatus(9999L, "SUCCESS", "");
+
+        BaseException exception = assertThrows(
+                BaseException.class,
+                () -> voucherOrderService.getOrderStatus(ORDER_ID)
+        );
+
+        assertEquals("秒杀订单不存在", exception.getMessage());
+        verify(voucherOrderMapper, never()).getByIdAndUserId(any(), any());
+    }
+
+    @Test
+    void shouldReturnSuccessFromDatabaseWhenStatusCacheIsMissing() {
+        BaseContext.setCurrentId(USER_ID);
+        when(stringRedisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.entries("seckill:order:status:" + ORDER_ID)).thenReturn(new HashMap<>());
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(
+                com.sky.entity.VoucherOrder.builder()
+                        .id(ORDER_ID)
+                        .userId(USER_ID)
+                        .voucherId(VOUCHER_ID)
+                        .build()
+        );
+
+        VoucherOrderStatusVO result = voucherOrderService.getOrderStatus(ORDER_ID);
+
+        assertEquals("SUCCESS", result.getStatus());
+    }
+
+    @Test
+    void shouldRejectUnknownOrderWhenCacheAndDatabaseMiss() {
+        BaseContext.setCurrentId(USER_ID);
+        when(stringRedisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.entries("seckill:order:status:" + ORDER_ID)).thenReturn(new HashMap<>());
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+
+        BaseException exception = assertThrows(
+                BaseException.class,
+                () -> voucherOrderService.getOrderStatus(ORDER_ID)
+        );
+
+        assertEquals("秒杀订单不存在", exception.getMessage());
+    }
+
+    @Test
+    void shouldTreatSameDatabaseOrderAsIdempotentSuccess() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(message);
+
+        Object result = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "createVoucherOrder", message);
+
+        assertEquals("SUCCESS", result.toString());
+        verify(seckillVoucherMapper, never()).deductStock(any());
+        verify(voucherOrderMapper, never()).insert(any());
+    }
+
+    @Test
+    void shouldClassifyDifferentExistingOrderAsDuplicate() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(
+                com.sky.entity.VoucherOrder.builder()
+                        .id(9999L)
+                        .userId(USER_ID)
+                        .voucherId(VOUCHER_ID)
+                        .build()
+        );
+
+        Object result = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "createVoucherOrder", message);
+
+        assertEquals("DUPLICATE", result.toString());
+        verify(seckillVoucherMapper, never()).deductStock(any());
+    }
+
+    @Test
+    void shouldClassifyDatabaseStockMismatchAsOutOfStock() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(null);
+        when(seckillVoucherMapper.deductStock(VOUCHER_ID)).thenReturn(0);
+
+        Object result = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "createVoucherOrder", message);
+
+        assertEquals("OUT_OF_STOCK", result.toString());
+        verify(voucherOrderMapper, never()).insert(any());
+    }
+
+    @Test
+    void shouldInsertOrderAfterConditionalStockDeduction() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(null);
+        when(seckillVoucherMapper.deductStock(VOUCHER_ID)).thenReturn(1);
+
+        Object result = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "createVoucherOrder", message);
+
+        assertEquals("SUCCESS", result.toString());
+        verify(voucherOrderMapper).insert(message);
+        assertEquals(2, message.getStatus());
+    }
+
+    @Test
+    void shouldCreateUniqueConsumerNameForEachJvmInstance() {
+        String first = ReflectionTestUtils.invokeMethod(
+                VoucherOrderServiceImpl.class, "createConsumerName", "compose-consumer");
+        String second = ReflectionTestUtils.invokeMethod(
+                VoucherOrderServiceImpl.class, "createConsumerName", "compose-consumer");
+
+        assertTrue(first.startsWith("compose-consumer-"));
+        assertTrue(second.startsWith("compose-consumer-"));
+        assertNotEquals(first, second);
+    }
+
+    @Test
+    void shouldAvoidCompensationWhenRetryLimitDatabaseStateIsUnknown() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        Map<String, String> values = new HashMap<>();
+        values.put("id", ORDER_ID.toString());
+        values.put("userId", USER_ID.toString());
+        values.put("voucherId", VOUCHER_ID.toString());
+        MapRecord<String, String, String> record = MapRecord.create("stream.orders", values);
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(null);
+        when(stringRedisTemplate.execute(
+                org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
+                anyList(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString()
+        )).thenReturn(1L);
+
+        ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "finalizeAfterRetryLimit", record, message);
+
+        verify(stringRedisTemplate).execute(
+                org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
+                anyList(),
+                eq(VOUCHER_ID.toString()),
+                eq(USER_ID.toString()),
+                eq(ORDER_ID.toString()),
+                eq(record.getId().getValue()),
+                eq("NONE"),
+                eq("0"),
+                eq("Manual review required"),
+                eq("86400"),
+                eq("1")
+        );
+    }
+
+    @Test
+    void shouldFinalizeSuccessWhenOrderAppearsAfterOutOfStockTransaction() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        Map<String, String> values = new HashMap<>();
+        values.put("id", ORDER_ID.toString());
+        values.put("userId", USER_ID.toString());
+        values.put("voucherId", VOUCHER_ID.toString());
+        MapRecord<String, String, String> record = MapRecord.create("stream.orders", values);
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID))
+                .thenReturn(null, message);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(null);
+        when(seckillVoucherMapper.deductStock(VOUCHER_ID)).thenReturn(0);
+        when(stringRedisTemplate.execute(
+                org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
+                anyList(),
+                anyString(), anyString(), anyString(), anyString(), anyString()
+        )).thenReturn(1L);
+
+        ReflectionTestUtils.invokeMethod(voucherOrderService, "processRecord", record);
+
+        verify(stringRedisTemplate).execute(
+                org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
+                anyList(),
+                eq(ORDER_ID.toString()),
+                eq(USER_ID.toString()),
+                eq(VOUCHER_ID.toString()),
+                eq(record.getId().getValue()),
+                eq("86400")
+        );
     }
 
     private void arrangeActiveSeckill(Long luaResult) {
@@ -161,8 +400,19 @@ class VoucherOrderServiceImplTest {
                 anyList(),
                 anyString(),
                 anyString(),
+                anyString(),
                 anyString()
         )).thenReturn(luaResult);
+    }
+
+    private void arrangeCachedStatus(Long ownerId, String status, String message) {
+        Map<Object, Object> values = new HashMap<>();
+        values.put("userId", ownerId.toString());
+        values.put("voucherId", VOUCHER_ID.toString());
+        values.put("status", status);
+        values.put("message", message);
+        when(stringRedisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.entries("seckill:order:status:" + ORDER_ID)).thenReturn(values);
     }
 
     private SeckillVoucher voucher(LocalDateTime beginTime, LocalDateTime endTime) {
@@ -171,6 +421,14 @@ class VoucherOrderServiceImplTest {
                 .stock(10)
                 .beginTime(beginTime)
                 .endTime(endTime)
+                .build();
+    }
+
+    private com.sky.entity.VoucherOrder voucherOrder() {
+        return com.sky.entity.VoucherOrder.builder()
+                .id(ORDER_ID)
+                .userId(USER_ID)
+                .voucherId(VOUCHER_ID)
                 .build();
     }
 }

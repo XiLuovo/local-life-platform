@@ -70,5 +70,11 @@ sky:
   order:
     # 服务端按商品数量计算打包费，客户端提交的金额与打包费不会被信任
     pack-fee-per-item: 0
+  seckill:
+    consumer-name: ${SKY_SECKILL_CONSUMER_NAME:${HOSTNAME:local}}
+    max-retries: ${SKY_SECKILL_MAX_RETRIES:3}
+    retry-delay-ms: ${SKY_SECKILL_RETRY_DELAY_MS:2000}
+    claim-idle-ms: ${SKY_SECKILL_CLAIM_IDLE_MS:30000}
+    block-timeout-ms: ${SKY_SECKILL_BLOCK_TIMEOUT_MS:2000}
   baidu:
     ak: your-ak

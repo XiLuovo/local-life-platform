@@ -1,14 +1,14 @@
 sky:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    host: mysql
-    port: 3306
+    host: ${MYSQL_HOST:mysql}
+    port: ${MYSQL_PORT:3306}
     database: ${MYSQL_DATABASE:sky_take_out}
     username: ${MYSQL_USER:sky}
     password: ${MYSQL_PASSWORD:local_app_password}
   redis:
-    host: redis
-    port: 6379
+    host: ${REDIS_HOST:redis}
+    port: ${REDIS_PORT:6379}
     password: ${REDIS_PASSWORD:local_redis_password}
     database: 10
   alioss:
