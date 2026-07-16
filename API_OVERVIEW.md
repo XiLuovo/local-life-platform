@@ -17,6 +17,7 @@
 - `GET /user/store/of/name`
 - `GET /user/voucher/list/{shopId}`
 - `POST /user/voucher-order/seckill/{id}`
+- `GET /user/voucher-order/{id}/status`
 
 ## Social
 

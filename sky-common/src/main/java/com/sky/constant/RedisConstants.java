@@ -15,5 +15,9 @@ public final class RedisConstants {
     public static final String FOLLOW_KEY = "follows:";
     public static final String USER_SIGN_KEY = "sign:";
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
+    public static final String SECKILL_ORDER_STATUS_KEY = "seckill:order:status:";
+    public static final String SECKILL_ORDER_RETRY_KEY = "seckill:order:retry:";
+    public static final long SECKILL_ORDER_STATUS_TTL_SECONDS = 24 * 60 * 60L;
     public static final String STREAM_ORDERS_KEY = "stream.orders";
+    public static final String STREAM_ORDERS_DLQ_KEY = "stream.orders.dlq";
 }

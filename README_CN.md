@@ -39,7 +39,8 @@
 - Redis Set 关注关系
 - Redis ZSet 点赞和动态流
 - Redis Lua 原子抢券
-- Redis Stream 异步秒杀下单
+- Redis Stream 异步秒杀下单，支持有限重试、`XCLAIM` 故障接管和 DLQ
+- Lua 原子维护订单状态、消息确认与失败补偿，避免重复消费和错误回补
 - WebSocket 订单提醒
 - Mock 支付兜底
 
@@ -137,6 +138,45 @@ mvn -q -pl sky-server -am -DskipTests compile
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1 -Code 123456
 ```
+
+## 秒杀可靠性设计
+
+秒杀请求不会同步写入数据库，而是先通过 Redis Lua 完成库存校验、一人一单校验、库存预扣、订单状态记录和 Stream 消息写入，再由后台消费者异步创建订单。
+
+处理流程：
+
+1. `POST /user/voucher-order/seckill/{id}` 返回订单 ID，并将订单状态原子记录为 `PENDING`
+2. 消费者从 `stream.orders` 读取消息并创建数据库订单
+3. 处理成功后原子更新为 `SUCCESS`、确认 Stream 消息并清理重试状态
+4. 处理失败时按固定间隔进行有限次数重试，避免消息持续热循环
+5. 消费者异常退出后，其他实例通过 `XPENDING + XCLAIM` 接管超过空闲时间的消息
+6. 重试耗尽后，先查询数据库最终状态；只有明确的重复订单或库存不一致才自动补偿
+7. 无法安全判断最终状态时不恢复库存、不释放资格，而是写入 DLQ 等待人工处理，避免错误回补造成超卖
+8. 未执行补偿的不确定状态允许被迟到的数据库成功结果修正为 `SUCCESS`
+
+客户端可通过以下接口查询异步处理结果：
+
+```http
+GET /user/voucher-order/{orderId}/status
+```
+
+状态说明：
+
+- `PENDING`：已通过秒杀资格校验，正在异步创建订单
+- `SUCCESS`：数据库订单创建成功
+- `FAILED`：处理失败，可通过返回的 `message` 查看原因
+
+状态接口会校验当前登录用户，不能查询其他用户的秒杀订单；Redis 状态丢失时会回源数据库确认结果。
+
+相关配置可通过环境变量调整：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `SKY_SECKILL_CONSUMER_NAME` | 当前主机名 | 消费者名称前缀，每个 JVM 会自动追加 UUID |
+| `SKY_SECKILL_MAX_RETRIES` | `3` | 单条消息最大处理次数 |
+| `SKY_SECKILL_RETRY_DELAY_MS` | `2000` | 当前消费者重试间隔，单位毫秒 |
+| `SKY_SECKILL_CLAIM_IDLE_MS` | `30000` | 消息空闲多久后允许被其他消费者接管 |
+| `SKY_SECKILL_BLOCK_TIMEOUT_MS` | `2000` | Stream 阻塞读取超时时间，单位毫秒 |
 
 ## 接口文档
 
