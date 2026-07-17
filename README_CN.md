@@ -133,6 +133,14 @@ mvn -pl sky-server -am spring-boot:run
 mvn -q -pl sky-server -am -DskipTests compile
 ```
 
+自动化测试：
+
+```powershell
+mvn -B -ntp test
+```
+
+秒杀集成测试使用 Testcontainers 自动启动隔离的 MySQL 8 和 Redis 7，因此运行测试时需要本机或 CI 提供 Docker。测试通过公开 HTTP 接口覆盖异步下单成功、一人一单、重试耗尽进入人工处理，以及崩溃消费者消息被 `XCLAIM` 接管。
+
 冒烟测试：
 
 ```powershell

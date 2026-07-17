@@ -111,6 +111,14 @@ Compile verification:
 mvn -q -pl sky-server -am -DskipTests compile
 ```
 
+Automated tests:
+
+```bash
+mvn -B -ntp test
+```
+
+Docker must be available because the seckill integration suite starts isolated MySQL 8 and Redis 7 containers with Testcontainers. It verifies the public HTTP flow for asynchronous success, duplicate-order rejection, retry exhaustion with manual review, and `XCLAIM` recovery from a crashed consumer.
+
 Quick smoke test:
 
 ```powershell

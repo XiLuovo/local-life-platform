@@ -1,0 +1,39 @@
+spring:
+  main:
+    allow-circular-references: true
+
+sky:
+  jwt:
+    admin-secret-key: integration-test-admin-secret-at-least-32-characters
+    admin-ttl: 7200000
+    admin-token-name: token
+    user-secret-key: integration-test-user-secret-at-least-32-characters
+    user-ttl: 7200000
+    user-token-name: authentication
+  alioss:
+    endpoint: oss-cn-hangzhou.aliyuncs.com
+    access-key-id: integration-test
+    access-key-secret: integration-test
+    bucket-name: integration-test
+  wechat:
+    appid: integration-test
+    secret: integration-test
+    mchid: integration-test
+    mchSerialNo: integration-test
+    privateKeyFilePath: integration-test
+    apiV3Key: integration-test-api-v3-key
+    weChatPayCertFilePath: integration-test
+    notifyUrl: http://localhost/integration-test
+    refundNotifyUrl: http://localhost/integration-test
+  auth:
+    fixed-login-code: 123456
+  pay:
+    mock-enabled: true
+  baidu:
+    ak: integration-test
+  seckill:
+    consumer-name: integration-test
+    max-retries: 3
+    retry-delay-ms: 100
+    claim-idle-ms: 500
+    block-timeout-ms: 100
