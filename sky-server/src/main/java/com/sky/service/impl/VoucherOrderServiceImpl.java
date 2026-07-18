@@ -8,6 +8,10 @@ import com.sky.entity.VoucherOrder;
 import com.sky.exception.BaseException;
 import com.sky.mapper.SeckillVoucherMapper;
 import com.sky.mapper.VoucherOrderMapper;
+import com.sky.metrics.SeckillMetrics;
+import com.sky.metrics.SeckillMetrics.AdmissionOutcome;
+import com.sky.metrics.SeckillMetrics.ProcessingOutcome;
+import com.sky.metrics.SeckillMetrics.StreamEvent;
 import com.sky.service.VoucherOrderService;
 import com.sky.utils.RedisIdWorker;
 import com.sky.vo.VoucherOrderStatusVO;
@@ -74,6 +78,8 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
     private StringRedisTemplate stringRedisTemplate;
     @Autowired
     private TransactionTemplate transactionTemplate;
+    @Autowired
+    private SeckillMetrics seckillMetrics;
 
     @Value("${sky.seckill.consumer-name:${HOSTNAME:local}}")
     private String consumerName;
@@ -126,50 +132,66 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
 
     @Override
     public Long seckillVoucher(Long voucherId) {
-        Long userId = BaseContext.getCurrentId();
-        if (userId == null) {
-            throw new BaseException(MessageConstant.USER_NOT_LOGIN);
-        }
+        long startedAt = System.nanoTime();
+        AdmissionOutcome outcome = AdmissionOutcome.ERROR;
+        try {
+            Long userId = BaseContext.getCurrentId();
+            if (userId == null) {
+                outcome = AdmissionOutcome.UNAUTHENTICATED;
+                throw new BaseException(MessageConstant.USER_NOT_LOGIN);
+            }
 
-        SeckillVoucher seckillVoucher = seckillVoucherMapper.getByVoucherId(voucherId);
-        if (seckillVoucher == null) {
-            throw new BaseException("Seckill voucher not found");
-        }
+            SeckillVoucher seckillVoucher = seckillVoucherMapper.getByVoucherId(voucherId);
+            if (seckillVoucher == null) {
+                outcome = AdmissionOutcome.VOUCHER_NOT_FOUND;
+                throw new BaseException("Seckill voucher not found");
+            }
 
-        LocalDateTime now = LocalDateTime.now();
-        if (now.isBefore(seckillVoucher.getBeginTime())) {
-            throw new BaseException("Seckill has not started");
-        }
-        if (now.isAfter(seckillVoucher.getEndTime())) {
-            throw new BaseException("Seckill has already ended");
-        }
+            LocalDateTime now = LocalDateTime.now();
+            if (now.isBefore(seckillVoucher.getBeginTime())) {
+                outcome = AdmissionOutcome.NOT_STARTED;
+                throw new BaseException("Seckill has not started");
+            }
+            if (now.isAfter(seckillVoucher.getEndTime())) {
+                outcome = AdmissionOutcome.ENDED;
+                throw new BaseException("Seckill has already ended");
+            }
 
-        stringRedisTemplate.opsForValue().setIfAbsent(
-                RedisConstants.SECKILL_STOCK_KEY + voucherId,
-                String.valueOf(seckillVoucher.getStock())
-        );
+            stringRedisTemplate.opsForValue().setIfAbsent(
+                    RedisConstants.SECKILL_STOCK_KEY + voucherId,
+                    String.valueOf(seckillVoucher.getStock())
+            );
 
-        long orderId = redisIdWorker.nextId("voucher-order");
-        Long result = stringRedisTemplate.execute(
-                SECKILL_SCRIPT,
-                Collections.emptyList(),
-                voucherId.toString(),
-                userId.toString(),
-                String.valueOf(orderId),
-                String.valueOf(RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS)
-        );
-        if (result == null) {
-            throw new BaseException("Seckill request failed");
-        }
+            long orderId = redisIdWorker.nextId("voucher-order");
+            Long result = stringRedisTemplate.execute(
+                    SECKILL_SCRIPT,
+                    Collections.emptyList(),
+                    voucherId.toString(),
+                    userId.toString(),
+                    String.valueOf(orderId),
+                    String.valueOf(RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS)
+            );
+            if (result == null) {
+                throw new BaseException("Seckill request failed");
+            }
 
-        int code = result.intValue();
-        if (code == 1) {
-            throw new BaseException("Out of stock");
+            int code = result.intValue();
+            if (code == 1) {
+                outcome = AdmissionOutcome.OUT_OF_STOCK;
+                throw new BaseException("Out of stock");
+            }
+            if (code == 2) {
+                outcome = AdmissionOutcome.DUPLICATE;
+                throw new BaseException("Duplicate voucher order is not allowed");
+            }
+            if (code != 0) {
+                throw new BaseException("Unexpected seckill result");
+            }
+            outcome = AdmissionOutcome.ACCEPTED;
+            return orderId;
+        } finally {
+            seckillMetrics.recordAdmission(outcome, System.nanoTime() - startedAt);
         }
-        if (code == 2) {
-            throw new BaseException("Duplicate voucher order is not allowed");
-        }
-        return orderId;
     }
 
     @Override
@@ -259,6 +281,7 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
                         break;
                     }
                     log.error("Voucher order consumer loop failed, consumerName={}", consumerName, e);
+                    seckillMetrics.recordStreamEvent(StreamEvent.CONSUMER_ERROR, 1);
                 }
             }
         }
@@ -328,6 +351,7 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
             return false;
         }
 
+        seckillMetrics.recordStreamEvent(StreamEvent.CLAIMED, claimedRecords.size());
         for (ByteRecord byteRecord : claimedRecords) {
             processRecord(byteRecord.deserialize(stringRedisTemplate.getStringSerializer()));
         }
@@ -335,38 +359,53 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
     }
 
     private void processRecord(MapRecord<String, String, String> record) {
-        VoucherOrder voucherOrder;
+        long startedAt = System.nanoTime();
+        ProcessingOutcome outcome = ProcessingOutcome.ERROR;
         try {
-            voucherOrder = mapToVoucherOrder(record.getValue());
-        } catch (Exception e) {
-            moveMalformedRecordToDeadLetter(record, e);
-            return;
-        }
+            VoucherOrder voucherOrder;
+            try {
+                voucherOrder = mapToVoucherOrder(record.getValue());
+            } catch (Exception e) {
+                moveMalformedRecordToDeadLetter(record, e);
+                outcome = ProcessingOutcome.MALFORMED;
+                return;
+            }
 
-        try {
-            OrderCreationResult result = handleVoucherOrder(voucherOrder);
-            if (!OrderCreationResult.SUCCESS.equals(result)
-                    && voucherOrderMapper.getByIdAndUserId(
-                    voucherOrder.getId(), voucherOrder.getUserId()) != null) {
-                result = OrderCreationResult.SUCCESS;
+            try {
+                OrderCreationResult result = handleVoucherOrder(voucherOrder);
+                if (!OrderCreationResult.CREATED.equals(result)
+                        && !OrderCreationResult.ALREADY_EXISTS.equals(result)
+                        && voucherOrderMapper.getByIdAndUserId(
+                        voucherOrder.getId(), voucherOrder.getUserId()) != null) {
+                    result = OrderCreationResult.ALREADY_EXISTS;
+                }
+                if (OrderCreationResult.CREATED.equals(result)) {
+                    finalizeSuccess(record, voucherOrder);
+                    outcome = ProcessingOutcome.CREATED;
+                } else if (OrderCreationResult.ALREADY_EXISTS.equals(result)) {
+                    finalizeSuccess(record, voucherOrder);
+                    outcome = ProcessingOutcome.IDEMPOTENT_SUCCESS;
+                } else if (OrderCreationResult.DUPLICATE.equals(result)) {
+                    finalizeFailure(record, voucherOrder, STOCK_ACTION_RESTORE, false,
+                            "Duplicate voucher order", StreamEvent.DLQ_DUPLICATE);
+                    outcome = ProcessingOutcome.DUPLICATE;
+                } else {
+                    finalizeFailure(record, voucherOrder, STOCK_ACTION_ZERO, true,
+                            "Database stock is exhausted", StreamEvent.DLQ_DATABASE_STOCK);
+                    outcome = ProcessingOutcome.DATABASE_STOCK_EXHAUSTED;
+                }
+            } catch (Exception e) {
+                outcome = handleProcessingFailure(record, voucherOrder, e);
             }
-            if (OrderCreationResult.SUCCESS.equals(result)) {
-                finalizeSuccess(record, voucherOrder);
-            } else if (OrderCreationResult.DUPLICATE.equals(result)) {
-                finalizeFailure(record, voucherOrder, STOCK_ACTION_RESTORE, false,
-                        "Duplicate voucher order", true);
-            } else {
-                finalizeFailure(record, voucherOrder, STOCK_ACTION_ZERO, true,
-                        "Database stock is exhausted", true);
-            }
-        } catch (Exception e) {
-            handleProcessingFailure(record, voucherOrder, e);
+        } finally {
+            seckillMetrics.recordProcessing(outcome, System.nanoTime() - startedAt);
         }
     }
 
-    private void handleProcessingFailure(MapRecord<String, String, String> record,
-                                         VoucherOrder voucherOrder,
-                                         Exception processingException) {
+    private ProcessingOutcome handleProcessingFailure(
+            MapRecord<String, String, String> record,
+            VoucherOrder voucherOrder,
+            Exception processingException) {
         String retryKey = RedisConstants.SECKILL_ORDER_RETRY_KEY + record.getId().getValue();
         Long attempts = stringRedisTemplate.opsForValue().increment(retryKey);
         stringRedisTemplate.expire(
@@ -378,39 +417,54 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
         if (currentAttempt < maxRetries) {
             log.warn("Voucher order processing will retry, orderId={}, attempt={}/{}",
                     voucherOrder.getId(), currentAttempt, maxRetries, processingException);
-            return;
+            return ProcessingOutcome.RETRY;
         }
 
         log.error("Voucher order processing reached retry limit, orderId={}, attempts={}",
                 voucherOrder.getId(), currentAttempt, processingException);
-        finalizeAfterRetryLimit(record, voucherOrder);
+        RetryFinalizationResult finalization = finalizeAfterRetryLimit(record, voucherOrder);
+        if (finalization.isFirstFinalization()) {
+            seckillMetrics.recordStreamEvent(StreamEvent.RETRY_EXHAUSTED, 1);
+        }
+        return finalization.getOutcome();
     }
 
-    private void finalizeAfterRetryLimit(MapRecord<String, String, String> record,
-                                         VoucherOrder voucherOrder) {
+    private RetryFinalizationResult finalizeAfterRetryLimit(
+            MapRecord<String, String, String> record,
+            VoucherOrder voucherOrder) {
         try {
             VoucherOrder exactOrder = voucherOrderMapper.getByIdAndUserId(
                     voucherOrder.getId(), voucherOrder.getUserId());
             if (exactOrder != null) {
-                finalizeSuccess(record, voucherOrder);
-                return;
+                return new RetryFinalizationResult(
+                        ProcessingOutcome.IDEMPOTENT_SUCCESS,
+                        finalizeSuccess(record, voucherOrder)
+                );
             }
 
             VoucherOrder existingOrder = voucherOrderMapper.getByUserAndVoucher(
                     voucherOrder.getUserId(), voucherOrder.getVoucherId());
             if (existingOrder != null) {
-                finalizeFailure(record, voucherOrder, STOCK_ACTION_RESTORE, false,
-                        "Duplicate voucher order", true);
-                return;
+                return new RetryFinalizationResult(
+                        ProcessingOutcome.DUPLICATE,
+                        finalizeFailure(record, voucherOrder, STOCK_ACTION_RESTORE, false,
+                                "Duplicate voucher order", StreamEvent.DLQ_DUPLICATE)
+                );
             }
 
-            finalizeFailure(record, voucherOrder, STOCK_ACTION_NONE, false,
-                    "Manual review required", true);
+            return new RetryFinalizationResult(
+                    ProcessingOutcome.MANUAL_REVIEW,
+                    finalizeFailure(record, voucherOrder, STOCK_ACTION_NONE, false,
+                            "Manual review required", StreamEvent.DLQ_MANUAL_REVIEW)
+            );
         } catch (Exception stateCheckException) {
             log.error("Unable to confirm database state after retry limit, orderId={}",
                     voucherOrder.getId(), stateCheckException);
-            finalizeFailure(record, voucherOrder, STOCK_ACTION_NONE, false,
-                    "Manual review required", true);
+            return new RetryFinalizationResult(
+                    ProcessingOutcome.MANUAL_REVIEW,
+                    finalizeFailure(record, voucherOrder, STOCK_ACTION_NONE, false,
+                            "Manual review required", StreamEvent.DLQ_MANUAL_REVIEW)
+            );
         }
     }
 
@@ -434,7 +488,7 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
         VoucherOrder exactOrder = voucherOrderMapper.getByIdAndUserId(
                 voucherOrder.getId(), voucherOrder.getUserId());
         if (exactOrder != null) {
-            return OrderCreationResult.SUCCESS;
+            return OrderCreationResult.ALREADY_EXISTS;
         }
 
         VoucherOrder existingOrder = voucherOrderMapper.getByUserAndVoucher(
@@ -455,11 +509,11 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
         voucherOrder.setPayTime(now);
         voucherOrder.setUpdateTime(now);
         voucherOrderMapper.insert(voucherOrder);
-        return OrderCreationResult.SUCCESS;
+        return OrderCreationResult.CREATED;
     }
 
-    private void finalizeSuccess(MapRecord<String, String, String> record,
-                                 VoucherOrder voucherOrder) {
+    private boolean finalizeSuccess(MapRecord<String, String, String> record,
+                                    VoucherOrder voucherOrder) {
         Long result = stringRedisTemplate.execute(
                 COMPLETE_SCRIPT,
                 Collections.emptyList(),
@@ -472,14 +526,15 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
         if (result == null) {
             throw new BaseException("Failed to finalize voucher order success");
         }
+        return result == 1L;
     }
 
-    private void finalizeFailure(MapRecord<String, String, String> record,
-                                 VoucherOrder voucherOrder,
-                                 String stockAction,
-                                 boolean releaseUser,
-                                 String reason,
-                                 boolean writeDeadLetter) {
+    private boolean finalizeFailure(MapRecord<String, String, String> record,
+                                    VoucherOrder voucherOrder,
+                                    String stockAction,
+                                    boolean releaseUser,
+                                    String reason,
+                                    StreamEvent deadLetterEvent) {
         Long result = stringRedisTemplate.execute(
                 FAIL_SCRIPT,
                 Collections.emptyList(),
@@ -491,11 +546,15 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
                 releaseUser ? "1" : "0",
                 reason,
                 String.valueOf(RedisConstants.SECKILL_ORDER_STATUS_TTL_SECONDS),
-                writeDeadLetter ? "1" : "0"
+                "1"
         );
         if (result == null) {
             throw new BaseException("Failed to finalize voucher order failure");
         }
+        if (result == 1L) {
+            seckillMetrics.recordStreamEvent(deadLetterEvent, 1);
+        }
+        return result == 1L;
     }
 
     private void moveMalformedRecordToDeadLetter(MapRecord<String, String, String> record,
@@ -511,6 +570,9 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
         );
         if (result == null) {
             throw new BaseException("Failed to move malformed voucher order message to DLQ");
+        }
+        if (result == 1L) {
+            seckillMetrics.recordStreamEvent(StreamEvent.DLQ_MALFORMED, 1);
         }
         log.error("Malformed voucher order message moved to DLQ, recordId={}",
                 record.getId().getValue(), exception);
@@ -537,8 +599,27 @@ public class VoucherOrderServiceImpl implements VoucherOrderService {
     }
 
     private enum OrderCreationResult {
-        SUCCESS,
+        CREATED,
+        ALREADY_EXISTS,
         DUPLICATE,
         OUT_OF_STOCK
+    }
+
+    private static final class RetryFinalizationResult {
+        private final ProcessingOutcome outcome;
+        private final boolean firstFinalization;
+
+        private RetryFinalizationResult(ProcessingOutcome outcome, boolean firstFinalization) {
+            this.outcome = outcome;
+            this.firstFinalization = firstFinalization;
+        }
+
+        private ProcessingOutcome getOutcome() {
+            return outcome;
+        }
+
+        private boolean isFirstFinalization() {
+            return firstFinalization;
+        }
     }
 }

@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.metrics.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,7 +22,9 @@ import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.domain.Range;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -31,6 +36,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,10 +44,12 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 @Testcontainers
 @ActiveProfiles("it")
+@AutoConfigureMetrics
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class VoucherOrderStreamIntegrationTest {
 
@@ -83,6 +91,8 @@ class VoucherOrderStreamIntegrationTest {
     private JdbcTemplate jdbcTemplate;
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+    @LocalManagementPort
+    private int managementPort;
 
     @Test
     void userCanCreateSeckillOrderAndObserveSuccess() throws Exception {
@@ -93,6 +103,67 @@ class VoucherOrderStreamIntegrationTest {
 
         assertEquals("SUCCESS", statusResponse.path("data").path("status").asText());
         assertEquals(orderId, statusResponse.path("data").path("orderId").asLong());
+
+        String metrics = restTemplate.getForObject(
+                managementUrl("/actuator/prometheus"), String.class);
+        assertNotNull(metrics);
+        assertTrue(metrics.contains("sky_seckill_admission_requests_total"));
+        assertTrue(metrics.contains("outcome=\"accepted\""));
+        assertTrue(metrics.contains("sky_seckill_processing_records_total"));
+    }
+
+    @Test
+    void actuatorOnlyExposesHealthAndPrometheus() {
+        ResponseEntity<String> health =
+                restTemplate.getForEntity(managementUrl("/actuator/health"), String.class);
+        assertEquals(HttpStatus.OK, health.getStatusCode());
+        assertNotNull(health.getBody());
+        assertTrue(health.getBody().contains("\"status\":\"UP\""));
+
+        ResponseEntity<String> prometheus =
+                restTemplate.getForEntity(
+                        managementUrl("/actuator/prometheus"), String.class);
+        assertEquals(HttpStatus.OK, prometheus.getStatusCode());
+        assertNotNull(prometheus.getBody());
+        assertTrue(prometheus.getBody().contains("jvm_memory_used_bytes"));
+
+        ResponseEntity<String> info =
+                restTemplate.getForEntity(managementUrl("/actuator/info"), String.class);
+        assertEquals(HttpStatus.NOT_FOUND, info.getStatusCode());
+    }
+
+    @Test
+    void successFinalizationReturnsFirstExecutionOnlyOnce() {
+        DefaultRedisScript<Long> completeScript = new DefaultRedisScript<>();
+        completeScript.setLocation(new ClassPathResource("seckill_complete.lua"));
+        completeScript.setResultType(Long.class);
+        String suffix = String.valueOf(System.nanoTime());
+        String orderId = "91" + suffix;
+        String recordId = "92" + suffix + "-0";
+
+        Long first = stringRedisTemplate.execute(
+                completeScript,
+                Collections.emptyList(),
+                orderId,
+                "93001",
+                "94001",
+                recordId,
+                "60"
+        );
+        Long repeated = stringRedisTemplate.execute(
+                completeScript,
+                Collections.emptyList(),
+                orderId,
+                "93001",
+                "94001",
+                recordId,
+                "60"
+        );
+
+        assertEquals(1L, first);
+        assertEquals(0L, repeated);
+        assertEquals("SUCCESS", stringRedisTemplate.opsForHash().get(
+                "seckill:order:status:" + orderId, "status"));
     }
 
     @Test
@@ -265,5 +336,9 @@ class VoucherOrderStreamIntegrationTest {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("authentication", token);
         return new HttpEntity<>(body, headers);
+    }
+
+    private String managementUrl(String path) {
+        return "http://localhost:" + managementPort + path;
     }
 }

@@ -62,4 +62,7 @@ redis.call('hset', statusKey,
 redis.call('expire', statusKey, statusTtl)
 redis.call('xack', 'stream.orders', 'g1', recordId)
 redis.call('del', retryKey)
-return 1
+if (firstFinalization) then
+    return 1
+end
+return 0

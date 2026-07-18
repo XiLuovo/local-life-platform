@@ -1,6 +1,7 @@
 param(
     [int[]]$Concurrency = @(100, 500, 1000),
     [int]$AppPort = 0,
+    [int]$ManagementPort = 0,
     [int]$MySqlPort = 0,
     [int]$RedisPort = 0,
     [string]$ProjectName = "",
@@ -445,6 +446,7 @@ if ($VoucherIdBase -le 1) {
 
 $environmentValues = [ordered]@{
     APP_PORT = [string]$AppPort
+    MANAGEMENT_PORT = [string]$ManagementPort
     MYSQL_PORT = [string]$MySqlPort
     REDIS_PORT = [string]$RedisPort
     MYSQL_ROOT_PASSWORD = $MySqlRootPassword

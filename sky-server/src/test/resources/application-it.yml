@@ -2,6 +2,11 @@ spring:
   main:
     allow-circular-references: true
 
+management:
+  server:
+    address: 127.0.0.1
+    port: 0
+
 sky:
   jwt:
     admin-secret-key: integration-test-admin-secret-at-least-32-characters
