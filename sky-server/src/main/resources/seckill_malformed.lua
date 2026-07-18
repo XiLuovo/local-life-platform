@@ -4,8 +4,9 @@ local payload = ARGV[3]
 local idempotencyTtl = ARGV[4]
 
 local malformedKey = 'seckill:order:malformed:' .. recordId
+local firstMalformed = redis.call('setnx', malformedKey, '1') == 1
 
-if (redis.call('setnx', malformedKey, '1') == 1) then
+if (firstMalformed) then
     redis.call('expire', malformedKey, idempotencyTtl)
     redis.call('xadd', 'stream.orders.dlq', '*',
             'originalRecordId', recordId,
@@ -15,4 +16,7 @@ end
 
 redis.call('xack', 'stream.orders', 'g1', recordId)
 redis.call('del', 'seckill:order:retry:' .. recordId)
-return 1
+if (firstMalformed) then
+    return 1
+end
+return 0

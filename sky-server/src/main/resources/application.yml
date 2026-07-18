@@ -1,6 +1,29 @@
 server:
   port: 8080
 
+management:
+  server:
+    address: ${SKY_MANAGEMENT_ADDRESS:127.0.0.1}
+    port: ${SKY_MANAGEMENT_PORT:8081}
+  endpoints:
+    enabled-by-default: false
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      enabled: true
+      show-details: never
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: local-life-platform
+    distribution:
+      percentiles-histogram:
+        "sky.seckill.admission.duration": true
+        "sky.seckill.processing.duration": true
+
 spring:
   profiles:
     active: dev
@@ -76,5 +99,6 @@ sky:
     retry-delay-ms: ${SKY_SECKILL_RETRY_DELAY_MS:2000}
     claim-idle-ms: ${SKY_SECKILL_CLAIM_IDLE_MS:30000}
     block-timeout-ms: ${SKY_SECKILL_BLOCK_TIMEOUT_MS:2000}
+    metrics-refresh-ms: ${SKY_SECKILL_METRICS_REFRESH_MS:5000}
   baidu:
     ak: your-ak

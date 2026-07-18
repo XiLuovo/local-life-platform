@@ -41,6 +41,7 @@
 - Redis Lua 原子抢券
 - Redis Stream 异步秒杀下单，支持有限重试、`XCLAIM` 故障接管和 DLQ
 - 使用 k6 复现 100、500、1000 并发秒杀，并自动校验 MySQL、Redis 与 Redis Stream 一致性（[压测报告](docs/performance/seckill-load-test.md)）
+- 使用 Micrometer + Prometheus 监控准入结果、异步落库、重试、消息接管、pending 和 DLQ
 - Lua 原子维护订单状态、消息确认与失败补偿，避免重复消费和错误回补
 - WebSocket 订单提醒
 - Mock 支付兜底
@@ -58,6 +59,7 @@
 - MySQL：`localhost:3306/sky_take_out`
 - Redis：`localhost:6379`，数据库 `10`
 - 服务端口：`8080`
+- 管理端口：`127.0.0.1:8081`（仅启用 `health` 和 `prometheus`；非 Docker 启动默认只监听本机回环地址）
 
 ## 配置说明
 
@@ -105,6 +107,8 @@ docker compose up --build -d
 
 - 服务：`http://localhost:8080`
 - Knife4j：`http://localhost:8080/doc.html`
+- 健康检查：`http://localhost:18081/actuator/health`
+- Prometheus 指标：`http://localhost:18081/actuator/prometheus`
 - MySQL：`localhost:13306/sky_take_out`
 - Redis：`localhost:16379`
 
@@ -152,6 +156,35 @@ powershell -ExecutionPolicy Bypass -File .\load-tests\run-seckill-load-test.ps1
 
 吞吐量、延迟、异步落库耗时和一致性结果见[秒杀压测报告](docs/performance/seckill-load-test.md)。
 
+### 秒杀可观测性
+
+Actuator 使用独立管理端口，只启用 `health` 和 `prometheus`；`info`、`env`、`configprops` 等端点保持关闭。指标标签全部来自固定枚举，不会写入用户 ID、优惠券 ID、订单 ID、JWT 或异常文本。
+
+| Prometheus 指标 | 类型 | 含义 |
+| --- | --- | --- |
+| `sky_seckill_admission_requests_total` | Counter | 秒杀成功、售罄、重复、非法请求和异常准入结果 |
+| `sky_seckill_admission_duration_seconds` | Histogram | 按结果区分的 Redis Lua 同步准入耗时 |
+| `sky_seckill_processing_records_total` | Counter | 处理尝试，按创建、幂等成功、重试、失败、人工复核和格式错误结果统计 |
+| `sky_seckill_processing_duration_seconds` | Histogram | 按结果区分的异步消息处理耗时 |
+| `sky_seckill_stream_events_total` | Counter | `XCLAIM`、重试耗尽、DLQ、消费者异常和 Gauge 刷新异常 |
+| `sky_seckill_stream_pending` | Gauge | 消费组 `g1` 当前 pending 消息数 |
+| `sky_seckill_stream_dlq_size` | Gauge | 当前死信 Stream 长度 |
+
+常用 PromQL：
+
+```promql
+sum(rate(sky_seckill_admission_requests_total[1m])) by (outcome)
+histogram_quantile(0.95, sum(rate(sky_seckill_admission_duration_seconds_bucket[5m])) by (le, outcome))
+increase(sky_seckill_processing_records_total{outcome="retry"}[5m])
+increase(sky_seckill_stream_events_total{event=~"retry_exhausted|dlq_.*|consumer_error|state_refresh_error"}[5m])
+sky_seckill_stream_pending
+sky_seckill_stream_dlq_size
+```
+
+`sky_seckill_processing_records_total` 统计的是处理尝试，而不是去重后的消息数，因此同一条消息可能先产生一次 `retry`，之后再产生一次最终结果。pending/DLQ Gauge 刷新失败时会保留上一次成功获取的值，同时增加 `sky_seckill_stream_events_total{event="state_refresh_error"}`。
+
+非 Docker 启动时，管理服务默认只监听 `127.0.0.1`。Docker 容器内显式监听所有接口，但宿主机管理端口仍只映射到 `127.0.0.1`。部署时应继续通过内网、网关或防火墙限制访问，不要直接暴露到公网。
+
 冒烟测试：
 
 ```powershell
@@ -196,6 +229,7 @@ GET /user/voucher-order/{orderId}/status
 | `SKY_SECKILL_RETRY_DELAY_MS` | `2000` | 当前消费者重试间隔，单位毫秒 |
 | `SKY_SECKILL_CLAIM_IDLE_MS` | `30000` | 消息空闲多久后允许被其他消费者接管 |
 | `SKY_SECKILL_BLOCK_TIMEOUT_MS` | `2000` | Stream 阻塞读取超时时间，单位毫秒 |
+| `SKY_SECKILL_METRICS_REFRESH_MS` | `5000` | pending 和 DLQ Gauge 的刷新间隔，单位毫秒 |
 
 ## 接口文档
 

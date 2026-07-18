@@ -5,6 +5,10 @@ import com.sky.entity.SeckillVoucher;
 import com.sky.exception.BaseException;
 import com.sky.mapper.SeckillVoucherMapper;
 import com.sky.mapper.VoucherOrderMapper;
+import com.sky.metrics.SeckillMetrics;
+import com.sky.metrics.SeckillMetrics.AdmissionOutcome;
+import com.sky.metrics.SeckillMetrics.ProcessingOutcome;
+import com.sky.metrics.SeckillMetrics.StreamEvent;
 import com.sky.utils.RedisIdWorker;
 import com.sky.vo.VoucherOrderStatusVO;
 import org.junit.jupiter.api.AfterEach;
@@ -34,9 +38,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -62,6 +68,8 @@ class VoucherOrderServiceImplTest {
     private HashOperations<String, Object, Object> hashOperations;
     @Mock
     private TransactionTemplate transactionTemplate;
+    @Mock
+    private SeckillMetrics seckillMetrics;
 
     @InjectMocks
     private VoucherOrderServiceImpl voucherOrderService;
@@ -85,6 +93,21 @@ class VoucherOrderServiceImplTest {
 
         assertEquals("用户未登录", exception.getMessage());
         verifyNoInteractions(seckillVoucherMapper, redisIdWorker, stringRedisTemplate);
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.UNAUTHENTICATED), anyLong());
+    }
+
+    @Test
+    void shouldRejectMissingVoucherAndRecordMetric() {
+        BaseContext.setCurrentId(USER_ID);
+        when(seckillVoucherMapper.getByVoucherId(VOUCHER_ID)).thenReturn(null);
+
+        BaseException exception = assertThrows(
+                BaseException.class,
+                () -> voucherOrderService.seckillVoucher(VOUCHER_ID)
+        );
+
+        assertEquals("Seckill voucher not found", exception.getMessage());
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.VOUCHER_NOT_FOUND), anyLong());
     }
 
     @Test
@@ -101,6 +124,7 @@ class VoucherOrderServiceImplTest {
 
         assertEquals("Seckill has not started", exception.getMessage());
         verifyNoInteractions(redisIdWorker, stringRedisTemplate);
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.NOT_STARTED), anyLong());
     }
 
     @Test
@@ -117,6 +141,7 @@ class VoucherOrderServiceImplTest {
 
         assertEquals("Seckill has already ended", exception.getMessage());
         verifyNoInteractions(redisIdWorker, stringRedisTemplate);
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.ENDED), anyLong());
     }
 
     @Test
@@ -130,6 +155,7 @@ class VoucherOrderServiceImplTest {
 
         assertEquals("Out of stock", exception.getMessage());
         verify(redisIdWorker).nextId("voucher-order");
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.OUT_OF_STOCK), anyLong());
     }
 
     @Test
@@ -143,6 +169,20 @@ class VoucherOrderServiceImplTest {
 
         assertEquals("Duplicate voucher order is not allowed", exception.getMessage());
         verify(redisIdWorker).nextId("voucher-order");
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.DUPLICATE), anyLong());
+    }
+
+    @Test
+    void shouldRejectUnexpectedLuaResultAndRecordErrorMetric() {
+        arrangeActiveSeckill(99L);
+
+        BaseException exception = assertThrows(
+                BaseException.class,
+                () -> voucherOrderService.seckillVoucher(VOUCHER_ID)
+        );
+
+        assertEquals("Unexpected seckill result", exception.getMessage());
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.ERROR), anyLong());
     }
 
     @Test
@@ -161,6 +201,7 @@ class VoucherOrderServiceImplTest {
                 eq("86400")
         );
         verify(voucherOrderMapper, never()).insert(any());
+        verify(seckillMetrics).recordAdmission(eq(AdmissionOutcome.ACCEPTED), anyLong());
     }
 
     @Test
@@ -253,7 +294,7 @@ class VoucherOrderServiceImplTest {
         Object result = ReflectionTestUtils.invokeMethod(
                 voucherOrderService, "createVoucherOrder", message);
 
-        assertEquals("SUCCESS", result.toString());
+        assertEquals("ALREADY_EXISTS", result.toString());
         verify(seckillVoucherMapper, never()).deductStock(any());
         verify(voucherOrderMapper, never()).insert(any());
     }
@@ -301,7 +342,7 @@ class VoucherOrderServiceImplTest {
         Object result = ReflectionTestUtils.invokeMethod(
                 voucherOrderService, "createVoucherOrder", message);
 
-        assertEquals("SUCCESS", result.toString());
+        assertEquals("CREATED", result.toString());
         verify(voucherOrderMapper).insert(message);
         assertEquals(2, message.getStatus());
     }
@@ -335,9 +376,12 @@ class VoucherOrderServiceImplTest {
                 anyString(), anyString(), anyString(), anyString()
         )).thenReturn(1L);
 
-        ReflectionTestUtils.invokeMethod(
+        Object result = ReflectionTestUtils.invokeMethod(
                 voucherOrderService, "finalizeAfterRetryLimit", record, message);
 
+        assertEquals(ProcessingOutcome.MANUAL_REVIEW,
+                ReflectionTestUtils.invokeMethod(result, "getOutcome"));
+        assertEquals(true, ReflectionTestUtils.invokeMethod(result, "isFirstFinalization"));
         verify(stringRedisTemplate).execute(
                 org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
                 anyList(),
@@ -351,6 +395,40 @@ class VoucherOrderServiceImplTest {
                 eq("86400"),
                 eq("1")
         );
+        verify(seckillMetrics).recordStreamEvent(StreamEvent.DLQ_MANUAL_REVIEW, 1);
+    }
+
+    @Test
+    void shouldRecordRetryExhaustedOnlyForFirstFinalization() {
+        com.sky.entity.VoucherOrder message = voucherOrder();
+        Map<String, String> values = new HashMap<>();
+        values.put("id", ORDER_ID.toString());
+        values.put("userId", USER_ID.toString());
+        values.put("voucherId", VOUCHER_ID.toString());
+        MapRecord<String, String, String> record = MapRecord.create("stream.orders", values);
+        ReflectionTestUtils.setField(voucherOrderService, "maxRetries", 3);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(3L, 4L);
+        when(voucherOrderMapper.getByIdAndUserId(ORDER_ID, USER_ID)).thenReturn(null);
+        when(voucherOrderMapper.getByUserAndVoucher(USER_ID, VOUCHER_ID)).thenReturn(null);
+        when(stringRedisTemplate.execute(
+                org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
+                anyList(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString()
+        )).thenReturn(1L, 0L);
+
+        Object firstOutcome = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "handleProcessingFailure", record, message,
+                new BaseException("temporary failure"));
+        Object repeatedOutcome = ReflectionTestUtils.invokeMethod(
+                voucherOrderService, "handleProcessingFailure", record, message,
+                new BaseException("temporary failure"));
+
+        assertEquals(ProcessingOutcome.MANUAL_REVIEW, firstOutcome);
+        assertEquals(ProcessingOutcome.MANUAL_REVIEW, repeatedOutcome);
+        verify(seckillMetrics, times(1)).recordStreamEvent(StreamEvent.RETRY_EXHAUSTED, 1);
+        verify(seckillMetrics, times(1)).recordStreamEvent(StreamEvent.DLQ_MANUAL_REVIEW, 1);
     }
 
     @Test
@@ -386,6 +464,8 @@ class VoucherOrderServiceImplTest {
                 eq(record.getId().getValue()),
                 eq("86400")
         );
+        verify(seckillMetrics).recordProcessing(
+                eq(ProcessingOutcome.IDEMPOTENT_SUCCESS), anyLong());
     }
 
     private void arrangeActiveSeckill(Long luaResult) {

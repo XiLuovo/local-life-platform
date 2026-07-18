@@ -51,6 +51,7 @@ The goal is to present one coherent "local life platform" instead of two separat
 - Redis Lua for atomic seckill qualification
 - Redis Stream for asynchronous voucher order creation with bounded retries, `XCLAIM` recovery, and DLQ handling
 - Reproducible k6 load testing at 100, 500, and 1,000 concurrent users with automated MySQL, Redis, and Redis Stream consistency checks ([report](docs/performance/seckill-load-test.md))
+- Micrometer + Prometheus observability for admission outcomes, asynchronous processing, retries, claims, pending messages, and DLQ state
 - Lua scripts for atomic order status transitions, acknowledgements, and idempotent compensation
 - WebSocket-based order reminder notifications
 - mock payment fallback for phone-login users without WeChat `openid`
@@ -73,6 +74,7 @@ For GitHub, the real `application-dev.yml` is ignored because it may contain loc
 - MySQL: `localhost:3306/sky_take_out`
 - Redis: `localhost:6379`, database `10`
 - Server port: `8080`
+- Management port: `127.0.0.1:8081` (`health` and `prometheus` only; non-Docker runs bind to loopback by default)
 
 ## Database Preparation
 
@@ -89,7 +91,7 @@ Copy-Item .env.example .env
 docker compose up --build -d
 ```
 
-The application is available at `http://localhost:8080`, with Knife4j at `http://localhost:8080/doc.html`.
+The application is available at `http://localhost:8080`, with Knife4j at `http://localhost:8080/doc.html`. Docker publishes the management port on loopback only: health is at `http://localhost:18081/actuator/health` and Prometheus metrics are at `http://localhost:18081/actuator/prometheus`.
 
 To reset the database and rerun all initialization scripts:
 
@@ -129,6 +131,35 @@ powershell -ExecutionPolicy Bypass -File .\load-tests\run-seckill-load-test.ps1
 ```
 
 See the [load-test report](docs/performance/seckill-load-test.md) for throughput, latency, asynchronous drain time, and consistency results.
+
+### Seckill Observability
+
+Actuator runs on a separate management port. Only `health` and `prometheus` are enabled; endpoints such as `info`, `env`, and `configprops` remain disabled. Metric labels use fixed outcome/event enums and never include user ids, voucher ids, order ids, JWTs, or exception messages.
+
+| Prometheus metric | Type | Meaning |
+| --- | --- | --- |
+| `sky_seckill_admission_requests_total` | Counter | accepted, sold-out, duplicate, invalid, and error admission outcomes |
+| `sky_seckill_admission_duration_seconds` | Histogram | synchronous Redis Lua admission latency by outcome |
+| `sky_seckill_processing_records_total` | Counter | processing attempts resulting in created, idempotent, retry, failed, manual-review, or malformed outcomes |
+| `sky_seckill_processing_duration_seconds` | Histogram | asynchronous record-processing latency by outcome |
+| `sky_seckill_stream_events_total` | Counter | `XCLAIM`, retry exhaustion, DLQ writes, consumer errors, and gauge refresh errors |
+| `sky_seckill_stream_pending` | Gauge | current pending-list size for consumer group `g1` |
+| `sky_seckill_stream_dlq_size` | Gauge | current dead-letter Stream length |
+
+Example PromQL:
+
+```promql
+sum(rate(sky_seckill_admission_requests_total[1m])) by (outcome)
+histogram_quantile(0.95, sum(rate(sky_seckill_admission_duration_seconds_bucket[5m])) by (le, outcome))
+increase(sky_seckill_processing_records_total{outcome="retry"}[5m])
+increase(sky_seckill_stream_events_total{event=~"retry_exhausted|dlq_.*|consumer_error|state_refresh_error"}[5m])
+sky_seckill_stream_pending
+sky_seckill_stream_dlq_size
+```
+
+`sky_seckill_processing_records_total` counts processing attempts rather than unique messages, so one message can first contribute a `retry` outcome and later contribute its terminal outcome. If a pending/DLQ gauge refresh fails, the gauge retains its last successfully observed value and the failure increments `sky_seckill_stream_events_total{event="state_refresh_error"}`.
+
+Non-Docker runs bind the management server to `127.0.0.1` by default. Docker explicitly listens inside the container and restricts the host mapping to `127.0.0.1`. In a deployed environment, keep the management port behind a private network, gateway, or firewall rather than exposing it directly to the internet.
 
 Quick smoke test:
 
@@ -238,8 +269,7 @@ Reliability settings:
 | `SKY_SECKILL_RETRY_DELAY_MS` | `2000` | delay before retrying current-consumer pending messages |
 | `SKY_SECKILL_CLAIM_IDLE_MS` | `30000` | idle time before another consumer may claim a message |
 | `SKY_SECKILL_BLOCK_TIMEOUT_MS` | `2000` | blocking Stream read timeout |
-
-This is one of the best technical highlights in the project.
+| `SKY_SECKILL_METRICS_REFRESH_MS` | `5000` | interval for refreshing pending and DLQ gauges |
 
 ## Important Entry Files
 
@@ -248,6 +278,7 @@ This is one of the best technical highlights in the project.
 - store APIs: [StoreController.java](sky-server/src/main/java/com/sky/controller/user/StoreController.java)
 - voucher APIs: [VoucherController.java](sky-server/src/main/java/com/sky/controller/user/VoucherController.java)
 - seckill ordering: [VoucherOrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/VoucherOrderServiceImpl.java)
+- seckill metrics: [SeckillMetrics.java](sky-server/src/main/java/com/sky/metrics/SeckillMetrics.java)
 - social APIs: [BlogController.java](sky-server/src/main/java/com/sky/controller/user/BlogController.java)
 - follow APIs: [FollowController.java](sky-server/src/main/java/com/sky/controller/user/FollowController.java)
 - order flow: [OrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/OrderServiceImpl.java)
