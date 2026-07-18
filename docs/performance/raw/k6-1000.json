@@ -1,0 +1,50 @@
+{
+  "configuration": {
+    "baseUrl": "http://app:8080",
+    "vus": 1000,
+    "voucherId": 9102
+  },
+  "derived": {
+    "burstWindowMs": 910,
+    "seckillRequestsPerSecond": 1098.901098901099
+  },
+  "metrics": {
+    "seckill_requests": {
+      "count": 1000
+    },
+    "seckill_accepted": {
+      "count": 500
+    },
+    "seckill_out_of_stock": {
+      "count": 500
+    },
+    "seckill_unexpected": {
+      "count": 0
+    },
+    "seckill_http_success": {
+      "rate": 1,
+      "passes": 1000,
+      "fails": 0
+    },
+    "seckill_classified": {
+      "rate": 1,
+      "passes": 1000,
+      "fails": 0
+    },
+    "seckill_request_duration": {
+      "p(99)": 132.41439205999998,
+      "avg": 57.08381598500008,
+      "min": 2.25863,
+      "med": 55.10458,
+      "max": 183.105068,
+      "p(90)": 104.40734560000001,
+      "p(95)": 118.724942
+    },
+    "seckill_request_started_at_ms": {
+      "min": 1784360205252
+    },
+    "seckill_request_completed_at_ms": {
+      "max": 1784360206162
+    }
+  }
+}
