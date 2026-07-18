@@ -50,6 +50,7 @@ The goal is to present one coherent "local life platform" instead of two separat
 - Redis ID worker for distributed-style order ids
 - Redis Lua for atomic seckill qualification
 - Redis Stream for asynchronous voucher order creation with bounded retries, `XCLAIM` recovery, and DLQ handling
+- Reproducible k6 load testing at 100, 500, and 1,000 concurrent users with automated MySQL, Redis, and Redis Stream consistency checks ([report](docs/performance/seckill-load-test.md))
 - Lua scripts for atomic order status transitions, acknowledgements, and idempotent compensation
 - WebSocket-based order reminder notifications
 - mock payment fallback for phone-login users without WeChat `openid`
@@ -118,6 +119,16 @@ mvn -B -ntp test
 ```
 
 Docker must be available because the seckill integration suite starts isolated MySQL 8 and Redis 7 containers with Testcontainers. It verifies the public HTTP flow for asynchronous success, duplicate-order rejection, retry exhaustion with manual review, and `XCLAIM` recovery from a crashed consumer.
+
+### Reproducible Seckill Load Test
+
+Docker is required. The runner starts isolated application, MySQL, Redis, and k6 containers, performs a separate 50-VU warm-up, then tests 100, 500, and 1,000 concurrent users while verifying MySQL, Redis, and Redis Stream consistency.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\load-tests\run-seckill-load-test.ps1
+```
+
+See the [load-test report](docs/performance/seckill-load-test.md) for throughput, latency, asynchronous drain time, and consistency results.
 
 Quick smoke test:
 

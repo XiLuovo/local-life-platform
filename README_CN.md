@@ -40,6 +40,7 @@
 - Redis ZSet 点赞和动态流
 - Redis Lua 原子抢券
 - Redis Stream 异步秒杀下单，支持有限重试、`XCLAIM` 故障接管和 DLQ
+- 使用 k6 复现 100、500、1000 并发秒杀，并自动校验 MySQL、Redis 与 Redis Stream 一致性（[压测报告](docs/performance/seckill-load-test.md)）
 - Lua 原子维护订单状态、消息确认与失败补偿，避免重复消费和错误回补
 - WebSocket 订单提醒
 - Mock 支付兜底
@@ -140,6 +141,16 @@ mvn -B -ntp test
 ```
 
 秒杀集成测试使用 Testcontainers 自动启动隔离的 MySQL 8 和 Redis 7，因此运行测试时需要本机或 CI 提供 Docker。测试通过公开 HTTP 接口覆盖异步下单成功、一人一单、重试耗尽进入人工处理，以及崩溃消费者消息被 `XCLAIM` 接管。
+
+### 可复现秒杀压测
+
+需要本机提供 Docker。脚本会启动隔离的应用、MySQL、Redis 和 k6 容器，先执行独立的 50 VU 预热，再依次测试 100、500、1000 并发用户，并自动校验 MySQL、Redis 与 Redis Stream 的数据一致性。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\load-tests\run-seckill-load-test.ps1
+```
+
+吞吐量、延迟、异步落库耗时和一致性结果见[秒杀压测报告](docs/performance/seckill-load-test.md)。
 
 冒烟测试：
 

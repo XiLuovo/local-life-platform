@@ -1,0 +1,13 @@
+services:
+  app:
+    environment:
+      LOGGING_LEVEL_COM_SKY_MAPPER: WARN
+
+  k6:
+    image: grafana/k6:0.54.0
+    working_dir: /scripts
+    volumes:
+      - ./load-tests:/scripts:ro
+      - ${K6_RESULTS_DIR:-./docs/performance/raw}:/results
+    depends_on:
+      - app
