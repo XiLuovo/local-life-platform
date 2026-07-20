@@ -4,16 +4,142 @@
 
 ## Project Overview
 
-This project is an internship-oriented Spring Boot backend for a local life platform.
+This internship-oriented Spring Boot backend combines take-out ordering, merchant management, store discovery, voucher marketing, social interaction, and a production-minded seckill pipeline in one local life platform.
 
-It now combines:
+The project emphasizes evidence-backed engineering rather than feature count: the high-concurrency path is covered by containerized integration tests, a reproducible k6 benchmark, low-cardinality Prometheus metrics, Docker Compose, and Java 8 CI.
 
-- take-out ordering and merchant management
-- store discovery and voucher marketing
-- social blog publishing, following, and sign-in
-- high-concurrency seckill voucher ordering with Redis Lua + Stream
+## At a Glance
 
-The goal is to present one coherent "local life platform" instead of two separate training projects.
+| Area | Implementation and evidence |
+| --- | --- |
+| Runtime | Java 8, Spring Boot 2.7.3, Maven multi-module build |
+| Data | MySQL 8, Redis 7, MyBatis, Redis Lua, Redis Stream |
+| Seckill reliability | Atomic admission, asynchronous persistence, bounded retries, `XPENDING` + `XCLAIM` recovery, idempotent finalization, and DLQ review |
+| Verification | JUnit 5, Mockito, Testcontainers, k6, Docker Compose, and GitHub Actions |
+| Observability | Micrometer timers/counters/gauges exposed through a loopback-restricted Prometheus management endpoint |
+
+### Verified Seckill Benchmark
+
+The committed [load-test report](docs/performance/seckill-load-test.md) records the following local, single-machine Docker results. Seckill req/s measures Redis Lua admission plus Stream publishing; MySQL persistence is asynchronous and reported separately as drain time.
+
+| Concurrent users | Initial stock | Accepted / sold out | Seckill req/s | P95 | Async drain | Cross-store checks |
+| ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 100 | 50 | 50 / 50 | 666.67 | 128.52 ms | 1.78 s | PASS |
+| 500 | 250 | 250 / 250 | 998.00 | 267.97 ms | 2.92 s | PASS |
+| 1,000 | 500 | 500 / 500 | 1,098.90 | 118.72 ms | 8.20 s | PASS |
+
+These figures are reproducibility evidence for the stated environment, not production-capacity claims. Every scenario verified MySQL orders and stock, Redis stock and buyer qualification, Stream pending/lag, and an empty DLQ.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client[User / admin / API client]
+
+    subgraph Application[Spring Boot application]
+        Http[REST controllers<br/>JWT interceptors]
+        Business[Take-out, store, social,<br/>and marketing modules]
+        Admission[Seckill admission<br/>interface]
+        Consumer[Voucher-order<br/>Stream consumer]
+        Persistence[MyBatis persistence<br/>adapter]
+        Metrics[Micrometer metrics]
+    end
+
+    subgraph Redis[Redis 7]
+        Structures[Cache, Set, ZSet,<br/>BitMap, ID worker]
+        Lua[Atomic admission<br/>Lua implementation]
+        Stream[stream.orders<br/>consumer group g1]
+        Status[Order status and<br/>idempotency keys]
+        Dlq[stream.orders.dlq]
+    end
+
+    MySql[(MySQL 8)]
+    Actuator[Actuator<br/>health + prometheus]
+    Prometheus[Prometheus scraper]
+
+    Client --> Http
+    Http --> Business
+    Http --> Admission
+    Business --> Structures
+    Business --> Persistence
+    Admission --> Persistence
+    Admission --> Lua
+    Lua --> Stream
+    Lua --> Status
+    Stream --> Consumer
+    Consumer --> Persistence
+    Consumer --> Status
+    Consumer --> Dlq
+    Persistence --> MySql
+    Admission --> Metrics
+    Consumer --> Metrics
+    Metrics --> Actuator
+    Actuator --> Prometheus
+```
+
+The public HTTP interface and the `VoucherOrderService` interface form the synchronous seam. Redis Lua hides atomic admission behind that seam, while the Stream consumer and MyBatis persistence adapter keep database work asynchronous and independently recoverable.
+
+## Seckill Core Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant HTTP as Voucher-order HTTP interface
+    participant Admission as Admission implementation
+    participant DB as MySQL
+    participant Lua as Redis admission Lua
+    participant Stream as stream.orders / group g1
+    participant Consumer as Stream consumer
+    participant Finalizer as Redis finalization Lua
+    participant DLQ as stream.orders.dlq
+    participant Metrics as Micrometer
+
+    Client->>HTTP: POST /seckill/{voucherId}
+    HTTP->>Admission: seckillVoucher(voucherId)
+    Admission->>DB: Validate voucher and sale window
+    Admission->>Lua: stock + buyer + orderId + status TTL
+    Lua->>Lua: Check stock and one-order-per-user
+    Lua->>Lua: Reserve stock and write PENDING
+    Lua->>Stream: XADD order message
+    Lua-->>Admission: accepted / sold out / duplicate
+    Admission->>Metrics: Record outcome and admission latency
+    Admission-->>Client: Return orderId when accepted
+
+    Stream-->>Consumer: XREADGROUP new or pending record
+    Consumer->>DB: Transactionally check, deduct, and insert
+    alt Order created or exact order already exists
+        Consumer->>Finalizer: Set SUCCESS + XACK + clear retry
+    else Deterministic duplicate or database stock conflict
+        Consumer->>Finalizer: Compensate safely + set FAILED + XACK
+        Finalizer->>DLQ: Write review record once
+    else Exception or uncertain final state
+        loop Bounded retries after retry delay
+            Consumer->>DB: Retry processing
+        end
+        Consumer->>DB: Recheck final database state
+        alt Exact order is confirmed
+            Consumer->>Finalizer: Set SUCCESS + XACK
+        else Outcome remains uncertain
+            Consumer->>Finalizer: Keep reservation + set FAILED + XACK
+            Finalizer->>DLQ: Write manual-review record once
+        end
+    end
+    Note over Stream,Consumer: Another instance claims stale records with XPENDING + XCLAIM
+    Note over Consumer,DLQ: Malformed records are idempotently moved to the DLQ and acknowledged
+    Consumer->>Metrics: Record processing, retry, claim, and DLQ outcomes
+    Client->>HTTP: GET /{orderId}/status
+    HTTP-->>Client: PENDING / SUCCESS / FAILED
+```
+
+## Engineering Highlights
+
+- Redis Lua atomically checks stock and duplicate purchase, reserves qualification, records `PENDING`, and publishes the Stream message.
+- The Redis Stream consumer persists orders through a transaction, delays bounded retries, and lets another JVM recover stale messages with `XPENDING + XCLAIM`.
+- Success, failure, acknowledgement, retry cleanup, DLQ writes, and deterministic compensation are finalized idempotently by Lua scripts.
+- Uncertain database outcomes are not blindly compensated: the reservation is retained and the record is routed to manual review to avoid overselling.
+- Testcontainers exercises the public HTTP flow against isolated MySQL 8 and Redis 7 instances, including success, duplicate rejection, manual review, `XCLAIM`, and finalization idempotency.
+- k6 scenarios and automated consistency checks make throughput, latency, asynchronous drain time, and Redis/MySQL/Stream invariants reproducible.
 
 ## Module Structure
 
@@ -40,7 +166,7 @@ The goal is to present one coherent "local life platform" instead of two separat
 - normal voucher creation
 - seckill voucher creation
 
-## Technical Highlights
+## Platform Technical Highlights
 
 - JWT-based user and admin authentication
 - Redis cache for store detail queries
@@ -282,6 +408,12 @@ Reliability settings:
 - social APIs: [BlogController.java](sky-server/src/main/java/com/sky/controller/user/BlogController.java)
 - follow APIs: [FollowController.java](sky-server/src/main/java/com/sky/controller/user/FollowController.java)
 - order flow: [OrderServiceImpl.java](sky-server/src/main/java/com/sky/service/impl/OrderServiceImpl.java)
+
+## Project Presentation
+
+- [Chinese resume bullets, three-minute walkthrough, design trade-offs, failure scenarios, and interview questions](docs/project-presentation-cn.md)
+- [Reproducible seckill load-test report](docs/performance/seckill-load-test.md)
+- [HTTP endpoint overview](API_OVERVIEW.md)
 
 ## Project Summary
 
