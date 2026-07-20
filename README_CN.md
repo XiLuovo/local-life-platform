@@ -4,7 +4,142 @@
 
 ## 项目简介
 
-这是一个 Spring Boot 后端项目，把外卖、门店、优惠券、秒杀和点评社交功能整合成一个本地生活平台。
+这是一个面向实习求职展示的 Spring Boot 本地生活平台后端，将外卖下单、商家管理、门店发现、优惠券营销、点评社交与工程化秒杀链路整合在同一个项目中。
+
+项目不以堆叠功能数量为目标，而是强调可验证的工程能力：高并发链路配有容器化集成测试、可复现 k6 压测、低基数 Prometheus 指标、Docker Compose 环境与 Java 8 持续集成。
+
+## 项目速览
+
+| 维度 | 实现与证据 |
+| --- | --- |
+| 运行时 | Java 8、Spring Boot 2.7.3、Maven 多模块构建 |
+| 数据层 | MySQL 8、Redis 7、MyBatis、Redis Lua、Redis Stream |
+| 秒杀可靠性 | 原子准入、异步落库、有限重试、`XPENDING + XCLAIM` 接管、幂等终结和 DLQ 人工复核 |
+| 质量保障 | JUnit 5、Mockito、Testcontainers、k6、Docker Compose、GitHub Actions |
+| 可观测性 | Micrometer Counter/Timer/Gauge，通过仅限回环地址访问的管理端口暴露 Prometheus 指标 |
+
+### 已验证的秒杀压测
+
+仓库内的[秒杀压测报告](docs/performance/seckill-load-test.md)记录了以下本机单节点 Docker 实测结果。秒杀 req/s 只计算 Redis Lua 准入和 Stream 投递；MySQL 异步落库耗时单独通过 drain time 展示。
+
+| 并发用户 | 初始库存 | 成功 / 售罄 | 秒杀 req/s | P95 | 异步清空耗时 | 跨存储校验 |
+| ---: | ---: | ---: | ---: | ---: | ---: | :---: |
+| 100 | 50 | 50 / 50 | 666.67 | 128.52 ms | 1.78 s | PASS |
+| 500 | 250 | 250 / 250 | 998.00 | 267.97 ms | 2.92 s | PASS |
+| 1000 | 500 | 500 / 500 | 1098.90 | 118.72 ms | 8.20 s | PASS |
+
+这些数字用于证明指定环境下的可复现性，不代表生产容量。每个场景都校验了 MySQL 订单与库存、Redis 库存与购买资格、Stream pending/lag 以及空 DLQ。
+
+## 总体架构
+
+```mermaid
+flowchart LR
+    Client[用户端 / 管理端 / API 客户端]
+
+    subgraph Application[Spring Boot 应用]
+        Http[REST 控制器<br/>JWT 拦截器]
+        Business[外卖、门店、社交<br/>与营销模块]
+        Admission[秒杀准入<br/>interface]
+        Consumer[订单 Stream<br/>消费者]
+        Persistence[MyBatis 持久化<br/>adapter]
+        Metrics[Micrometer 指标]
+    end
+
+    subgraph Redis[Redis 7]
+        Structures[缓存、Set、ZSet<br/>BitMap、ID 生成器]
+        Lua[原子准入<br/>Lua implementation]
+        Stream[stream.orders<br/>消费组 g1]
+        Status[订单状态与<br/>幂等键]
+        Dlq[stream.orders.dlq]
+    end
+
+    MySql[(MySQL 8)]
+    Actuator[Actuator<br/>health + prometheus]
+    Prometheus[Prometheus 采集端]
+
+    Client --> Http
+    Http --> Business
+    Http --> Admission
+    Business --> Structures
+    Business --> Persistence
+    Admission --> Persistence
+    Admission --> Lua
+    Lua --> Stream
+    Lua --> Status
+    Stream --> Consumer
+    Consumer --> Persistence
+    Consumer --> Status
+    Consumer --> Dlq
+    Persistence --> MySql
+    Admission --> Metrics
+    Consumer --> Metrics
+    Metrics --> Actuator
+    Actuator --> Prometheus
+```
+
+公开 HTTP interface 与 `VoucherOrderService` interface 构成同步 seam。Redis Lua 将原子准入的 implementation 隐藏在该 seam 之后；Stream 消费者和 MyBatis 持久化 adapter 则让数据库写入保持异步，并可独立重试和恢复。
+
+## 秒杀核心时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as 客户端
+    participant HTTP as 秒杀 HTTP interface
+    participant Admission as 准入 implementation
+    participant DB as MySQL
+    participant Lua as Redis 准入 Lua
+    participant Stream as stream.orders / g1
+    participant Consumer as Stream 消费者
+    participant Finalizer as Redis 终结 Lua
+    participant DLQ as stream.orders.dlq
+    participant Metrics as Micrometer
+
+    Client->>HTTP: POST /seckill/{voucherId}
+    HTTP->>Admission: seckillVoucher(voucherId)
+    Admission->>DB: 校验优惠券与活动时间
+    Admission->>Lua: 库存、用户、订单 ID、状态 TTL
+    Lua->>Lua: 校验库存与一人一单
+    Lua->>Lua: 预扣库存并写入 PENDING
+    Lua->>Stream: XADD 订单消息
+    Lua-->>Admission: 成功 / 售罄 / 重复
+    Admission->>Metrics: 记录结果与准入耗时
+    Admission-->>Client: 准入成功后返回订单 ID
+
+    Stream-->>Consumer: XREADGROUP 新消息或 pending 消息
+    Consumer->>DB: 事务校验、扣库存并写入订单
+    alt 创建成功或同一订单已存在
+        Consumer->>Finalizer: 写 SUCCESS + XACK + 清理重试键
+    else 明确的重复订单或数据库库存冲突
+        Consumer->>Finalizer: 安全补偿 + 写 FAILED + XACK
+        Finalizer->>DLQ: 幂等写入复核记录
+    else 异常或最终状态不确定
+        loop 按重试间隔进行有限重试
+            Consumer->>DB: 再次处理
+        end
+        Consumer->>DB: 重查数据库最终状态
+        alt 确认同一订单已落库
+            Consumer->>Finalizer: 写 SUCCESS + XACK
+        else 结果仍不确定
+            Consumer->>Finalizer: 保留资格 + 写 FAILED + XACK
+            Finalizer->>DLQ: 幂等写入人工复核记录
+        end
+    end
+    Note over Stream,Consumer: 其他实例通过 XPENDING + XCLAIM 接管陈旧消息
+    Note over Consumer,DLQ: 格式错误消息会幂等写入 DLQ 并确认
+    Consumer->>Metrics: 记录处理、重试、接管与 DLQ 结果
+    Client->>HTTP: GET /{orderId}/status
+    HTTP-->>Client: PENDING / SUCCESS / FAILED
+```
+
+## 核心工程亮点
+
+- Redis Lua 原子完成库存校验、一人一单、资格预扣、`PENDING` 状态记录与 Stream 投递。
+- Redis Stream 消费者在事务中落库，通过延迟有限重试避免 pending 热循环，并允许其他 JVM 使用 `XPENDING + XCLAIM` 接管陈旧消息。
+- 成功、失败、消息确认、重试键清理、DLQ 写入和确定性补偿由 Lua 幂等终结，避免重复消费造成二次副作用。
+- 数据库最终状态不确定时不盲目回补库存，而是保留资格并进入人工复核，避免错误补偿导致超卖。
+- Testcontainers 通过公开 HTTP 流程验证 MySQL 8 与 Redis 7 上的成功下单、重复拒绝、人工复核、`XCLAIM` 和终结幂等。
+- k6 场景及自动一致性校验让吞吐、延迟、异步清空耗时以及 Redis/MySQL/Stream 不变量可复现。
 
 ## 模块结构
 
@@ -31,7 +166,7 @@
 - 普通优惠券创建
 - 秒杀优惠券创建
 
-## 技术亮点
+## 平台技术亮点
 
 - JWT 鉴权
 - Redis 门店缓存
@@ -238,3 +373,5 @@ GET /user/voucher-order/{orderId}/status
 ## 相关资料
 
 - [接口总览](API_OVERVIEW.md)
+- [项目展示、简历描述与面试说明](docs/project-presentation-cn.md)
+- [可复现秒杀压测报告](docs/performance/seckill-load-test.md)
